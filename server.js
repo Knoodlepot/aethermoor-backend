@@ -122,7 +122,10 @@ setInterval(() => {
 app.use(express.json({ limit: '50kb' }));
 
 const ALLOWED_ORIGINS = [
-  'http://localhost', 'http://127.0.0.1', 'null',
+  'http://localhost', 
+  'http://127.0.0.1', 
+  'null',
+  'https://knoodlepot.github.io/aethermoor-game/',
   GAME_URL.replace(/\/$/, ''),
 ];
 
