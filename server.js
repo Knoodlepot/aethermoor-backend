@@ -129,9 +129,9 @@ function getIP(req) {
 async function getBalance(playerId) {
   const r = await db.query('SELECT tokens FROM players WHERE player_id = $1', [playerId]);
   if (r.rows.length === 0) {
-    await db.query('INSERT INTO players (player_id, tokens) VALUES ($1, 50) ON CONFLICT DO NOTHING', [playerId]);
-    await db.query('INSERT INTO token_log (player_id, change, reason) VALUES ($1, 50, $2)', [playerId, 'new_player_bonus']);
-    return 50;
+    await db.query('INSERT INTO players (player_id, tokens) VALUES ($1, 100) ON CONFLICT DO NOTHING', [playerId]);
+    await db.query('INSERT INTO token_log (player_id, change, reason) VALUES ($1, 100, $2)', [playerId, 'new_player_bonus']);
+    return 100;
   }
   return r.rows[0].tokens;
 }
