@@ -273,8 +273,9 @@ function requireGameOrigin(req, res, next) {
   const tokenOk   = !GAME_TOKEN || token === GAME_TOKEN;
 
   if (!originOk || !refererOk || !tokenOk) {
-    console.warn('[BLOCKED] origin=' + origin + ' referer=' + referer + ' tokenOk=' + tokenOk + ' ip=' + getIP(req));
-    return res.status(403).json({ error: 'forbidden', message: 'Unauthorised request.' });
+    const why = !originOk ? 'origin' : !refererOk ? 'referer' : 'token';
+    console.warn('[BLOCKED] why=' + why + ' origin=' + origin + ' referer=' + referer + ' tokenOk=' + tokenOk + ' ip=' + getIP(req));
+    return res.status(403).json({ error: 'forbidden', message: 'Unauthorised request: ' + why + ' check failed.' });
   }
   next();
 }
