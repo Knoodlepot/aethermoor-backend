@@ -108,7 +108,7 @@ async function getBalance(playerId) {
   if (result.rows.length === 0) {
     // First time we've seen this player — give them 50 free starter tokens
     await db.query(
-      'INSERT INTO players (player_id, tokens) VALUES ($1, 50) ON CONFLICT DO NOTHING',
+      'INSERT INTO players (player_id, tokens) VALUES ($1, 100) ON CONFLICT DO NOTHING',
       [playerId]
     );
     await db.query(
