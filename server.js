@@ -1,124 +1,243 @@
 // ============================================================
-// AETHERMOOR BACKEND SERVER
+// AETHERMOOR BACKEND SERVER  v2.0
 // ============================================================
-// Handles three things:
-//   1. Anthropic API proxy (keeps your key secret)
-//   2. Rate limiting (stops runaway API costs)
-//   3. Patreon OAuth (automatically unlocks full game for subscribers)
+// What this does:
+//   1. Anthropic API proxy (keeps your API key secret & hidden from players)
+//   2. Token balance tracking (each player has a balance stored in a database)
+//   3. Token deduction (every AI turn costs 1 token)
+//   4. Stripe payments (players buy token bundles — money goes to you)
+//   5. Rate limiting (stops any single player hammering your API)
+//   6. Retry logic (if Anthropic is briefly busy, it retries automatically)
 //
-// ENVIRONMENT VARIABLES — set all of these in Railway:
+// ── RAILWAY SETUP GUIDE ──────────────────────────────────────
 //
-//   ANTHROPIC_API_KEY       Your Anthropic key (sk-ant-...)
-//   PATREON_CLIENT_ID       From patreon.com/portal → My Clients
-//   PATREON_CLIENT_SECRET   From patreon.com/portal → My Clients
-//   PATREON_CAMPAIGN_ID     Your campaign ID — see note below
-//   PATREON_REDIRECT_URI    https://YOUR-RAILWAY-URL/auth/patreon/callback
-//   GAME_URL                Where your game HTML is hosted
-//   SESSION_SECRET          Any long random string (e.g. 64 random characters)
+// STEP 1 — Add a Postgres database
+//   In Railway → your project → click "New" → "Database" → "Add PostgreSQL"
+//   Railway automatically adds DATABASE_URL to your environment. Done.
 //
-// HOW TO FIND YOUR CAMPAIGN ID:
-//   1. Log into Patreon as creator
-//   2. Go to: https://www.patreon.com/api/oauth2/v2/campaigns
-//      (paste this in your browser while logged in)
-//   3. Copy the "id" value from the response — that's your campaign ID
+// STEP 2 — Set these in Railway → your service → Variables:
+//
+//   ANTHROPIC_API_KEY       Your Anthropic key (starts sk-ant-...)
+//   STRIPE_SECRET_KEY       From stripe.com → Developers → API keys
+//                           Use sk_test_... while testing, sk_live_... when live
+//   STRIPE_WEBHOOK_SECRET   From stripe.com → Developers → Webhooks → your endpoint
+//   SESSION_SECRET          Any long random string (just mash your keyboard)
+//   GAME_URL                https://knoodlepot.github.io/aethermoor-game
+//   DATABASE_URL            Set automatically by Railway — don't touch it
+//
+// STEP 3 — Set up your Stripe webhook
+//   Stripe dashboard → Developers → Webhooks → Add endpoint
+//   URL:    https://YOUR-RAILWAY-URL/stripe/webhook
+//   Events: checkout.session.completed
+//
+// STEP 4 — Add your Stripe price IDs below (search for REPLACE_WITH)
+//   Stripe dashboard → Products → create one product per bundle below
+//   Set a one-time price for each → copy the "Price ID" (price_xxx...)
+//
+// ── PACKAGE: install these in Railway via package.json ───────
+//   npm install express node-fetch pg stripe
 // ============================================================
 
-const express = require('express');
-const crypto  = require('crypto');
-const fetch   = require('node-fetch');
+const express  = require('express');
+const crypto   = require('crypto');
+const fetch    = require('node-fetch');
+const { Pool } = require('pg');
+const stripe   = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Environment variables ────────────────────────────────────
-const ANTHROPIC_KEY        = process.env.ANTHROPIC_API_KEY;
-const PATREON_CLIENT_ID    = process.env.PATREON_CLIENT_ID;
-const PATREON_CLIENT_SECRET = process.env.PATREON_CLIENT_SECRET;
-const PATREON_REDIRECT_URI = process.env.PATREON_REDIRECT_URI;
-const GAME_URL             = process.env.GAME_URL || 'http://localhost';
-const SESSION_SECRET       = process.env.SESSION_SECRET || 'change-this-in-production';
+const ANTHROPIC_KEY         = process.env.ANTHROPIC_API_KEY;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const GAME_URL              = process.env.GAME_URL || 'https://knoodlepot.github.io/aethermoor-game';
 
 if (!ANTHROPIC_KEY) {
   console.error('ANTHROPIC_API_KEY not set. Add it in Railway Variables.');
   process.exit(1);
 }
-
-if (!PATREON_CLIENT_ID || !PATREON_CLIENT_SECRET) {
-  console.warn('Patreon OAuth not configured — players will only get demo access.');
+if (!process.env.DATABASE_URL) {
+  console.error('DATABASE_URL not set. Add a PostgreSQL database in Railway (New → Database → PostgreSQL).');
+  process.exit(1);
 }
 
-// ── Session store ─────────────────────────────────────────────
-// In-memory — survives as long as the server process runs.
-// Sessions expire after 30 days.
-const sessions   = new Map();
-const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
+// ── Database connection ───────────────────────────────────────
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
 
-function generateToken() {
-  return crypto.randomBytes(32).toString('hex');
+// Runs once on startup — creates tables if they don't already exist.
+// Safe to run repeatedly (IF NOT EXISTS means it never overwrites data).
+async function initDb() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS players (
+      player_id    TEXT PRIMARY KEY,
+      tokens       INTEGER NOT NULL DEFAULT 0,
+      total_spent  INTEGER NOT NULL DEFAULT 0,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS token_log (
+      id          SERIAL PRIMARY KEY,
+      player_id   TEXT NOT NULL,
+      change      INTEGER NOT NULL,
+      reason      TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS purchases (
+      id                TEXT PRIMARY KEY,
+      player_id         TEXT NOT NULL,
+      stripe_session_id TEXT,
+      tokens_awarded    INTEGER NOT NULL,
+      amount_pence      INTEGER NOT NULL,
+      status            TEXT DEFAULT 'pending',
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  console.log('Database tables ready');
 }
 
-function createSession(patreonUserId, isSubscriber, tier) {
-  const token = generateToken();
-  sessions.set(token, { patreonUserId, isSubscriber, tier, expiresAt: Date.now() + SESSION_TTL });
-  return token;
-}
+// ── Token helpers ─────────────────────────────────────────────
 
-function getSession(token) {
-  if (!token) return null;
-  const s = sessions.get(token);
-  if (!s) return null;
-  if (Date.now() > s.expiresAt) { sessions.delete(token); return null; }
-  return s;
-}
-
-// Purge expired sessions hourly
-setInterval(() => {
-  const now = Date.now();
-  for (const [t, s] of sessions.entries()) {
-    if (now > s.expiresAt) sessions.delete(t);
+async function getBalance(playerId) {
+  const result = await db.query('SELECT tokens FROM players WHERE player_id = $1', [playerId]);
+  if (result.rows.length === 0) {
+    // First time we've seen this player — give them 50 free starter tokens
+    await db.query(
+      'INSERT INTO players (player_id, tokens) VALUES ($1, 50) ON CONFLICT DO NOTHING',
+      [playerId]
+    );
+    await db.query(
+      'INSERT INTO token_log (player_id, change, reason) VALUES ($1, 50, $2)',
+      [playerId, 'new_player_bonus']
+    );
+    return 50;
   }
-}, 60 * 60 * 1000);
+  return result.rows[0].tokens;
+}
 
-// ── Rate limiting ─────────────────────────────────────────────
-const LIMITS = {
-  narrator: { perHour: 60,  perMinute: 5  },
-  screen:   { perHour: 120, perMinute: 10 },
+async function spendToken(playerId) {
+  // Deduct 1 token atomically. Only succeeds if they have tokens > 0.
+  const result = await db.query(
+    'UPDATE players SET tokens = tokens - 1 WHERE player_id = $1 AND tokens > 0 RETURNING tokens',
+    [playerId]
+  );
+  if (result.rows.length === 0) {
+    const bal = await getBalance(playerId);
+    return { success: false, remaining: bal };
+  }
+  const remaining = result.rows[0].tokens;
+  await db.query(
+    'INSERT INTO token_log (player_id, change, reason) VALUES ($1, -1, $2)',
+    [playerId, 'ai_turn']
+  );
+  return { success: true, remaining };
+}
+
+async function addTokens(playerId, amount, reason) {
+  await db.query(
+    `INSERT INTO players (player_id, tokens)
+     VALUES ($1, $2)
+     ON CONFLICT (player_id)
+     DO UPDATE SET tokens = players.tokens + $2`,
+    [playerId, amount]
+  );
+  await db.query(
+    'INSERT INTO token_log (player_id, change, reason) VALUES ($1, $2, $3)',
+    [playerId, amount, reason]
+  );
+}
+
+// ── Token packages ────────────────────────────────────────────
+// Edit prices freely. Once you create a product in Stripe, paste the
+// price_id in here. The price_id always starts with "price_".
+const TOKEN_PACKAGES = {
+  starter: {
+    name:         'Starter Pack',
+    tokens:       100,
+    amount_pence: 100,   // £1.00
+    price_id:     'price_1T8kmJKvhVLecCSvf593COyi',
+    description:  '100 tokens — good for a solid session',
+  },
+  adventurer: {
+    name:         'Adventurer Pack',
+    tokens:       300,
+    amount_pence: 250,   // £2.50
+    price_id:     'price_1T8kmlKvhVLecCSvV6GQdjMh',
+    description:  '300 tokens — best value',
+  },
+  hero: {
+    name:         'Hero Pack',
+    tokens:       750,
+    amount_pence: 500,   // £5.00
+    price_id:     'price_1T8kn5KvhVLecCSvmCtEMlx3',
+    description:  '750 tokens — for serious adventurers',
+  },
+  legend: {
+    name:         'Legend Pack',
+    tokens:       1500,
+    amount_pence: 999,   // £9.99
+    price_id:     'price_1T8kntKvhVLecCSv8kd4Pkzu',
+    description:  '1,500 tokens — the full Aethermoor experience',
+  },
 };
-const rateLimitStore = new Map();
 
-function getRateLimitEntry(ip) {
-  if (!rateLimitStore.has(ip)) rateLimitStore.set(ip, { narrator: [], screen: [] });
-  return rateLimitStore.get(ip);
-}
+// ── Rate limiting (per IP, secondary safety net) ──────────────
+const RATE_LIMIT    = { perMinute: 8, perHour: 80 };
+const rateStore     = new Map();
 
-function isRateLimited(ip, type) {
-  const entry  = getRateLimitEntry(ip);
-  const now    = Date.now();
-  const oneMin = 60 * 1000;
-  const oneHr  = 60 * 60 * 1000;
-  const limit  = LIMITS[type];
-  entry[type]  = entry[type].filter(t => now - t < oneHr);
-  const inLastMinute = entry[type].filter(t => now - t < oneMin).length;
-  if (inLastMinute >= limit.perMinute) return { limited: true, reason: 'Too many requests — please slow down a little.' };
-  if (entry[type].length >= limit.perHour) {
-    const resetIn = Math.ceil((entry[type][0] + oneHr - now) / 60000);
-    return { limited: true, reason: `Hourly limit reached. Resets in about ${resetIn} minute${resetIn !== 1 ? 's' : ''}.` };
-  }
+function isRateLimited(ip) {
+  if (!rateStore.has(ip)) rateStore.set(ip, []);
+  const now   = Date.now();
+  let calls   = rateStore.get(ip).filter(t => now - t < 3600000);
+  rateStore.set(ip, calls);
+  const recent = calls.filter(t => now - t < 60000).length;
+  if (recent  >= RATE_LIMIT.perMinute) return { limited: true, reason: 'Too many requests — please slow down.' };
+  if (calls.length >= RATE_LIMIT.perHour)  return { limited: true, reason: 'Hourly limit reached. Try again shortly.' };
   return { limited: false };
 }
-
-function recordCall(ip, type) { getRateLimitEntry(ip)[type].push(Date.now()); }
-
+function recordCall(ip) {
+  const calls = rateStore.get(ip) || [];
+  rateStore.set(ip, [...calls, Date.now()]);
+}
 setInterval(() => {
-  const now = Date.now(); const oneHr = 60 * 60 * 1000;
-  for (const [ip, entry] of rateLimitStore.entries()) {
-    entry.narrator = entry.narrator.filter(t => now - t < oneHr);
-    entry.screen   = entry.screen.filter(t => now - t < oneHr);
-    if (!entry.narrator.length && !entry.screen.length) rateLimitStore.delete(ip);
+  const cutoff = Date.now() - 3600000;
+  for (const [ip, calls] of rateStore) {
+    const fresh = calls.filter(t => t > cutoff);
+    if (!fresh.length) rateStore.delete(ip); else rateStore.set(ip, fresh);
   }
-}, 60 * 60 * 1000);
+}, 3600000);
+
+// ── Anthropic API with auto-retry ────────────────────────────
+// If Anthropic returns 429 (their servers are busy), we wait and retry
+// automatically — up to 3 times. The player won't usually notice.
+async function callAnthropic(body, attempt = 1) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:  'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'x-api-key':         ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 429 && attempt <= 3) {
+    const wait = attempt * 3000; // 3s → 6s → 9s
+    console.log(`Anthropic busy (429) — retrying in ${attempt * 3}s (attempt ${attempt}/3)`);
+    await new Promise(r => setTimeout(r, wait));
+    return callAnthropic(body, attempt + 1);
+  }
+  const data = await res.json();
+  return { status: res.status, data };
+}
 
 // ── Middleware ─────────────────────────────────────────────────
+// Stripe webhooks need the raw body (before JSON parsing), so this goes first
+app.use('/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '50kb' }));
 
 const ALLOWED_ORIGINS = [
@@ -126,7 +245,6 @@ const ALLOWED_ORIGINS = [
   'https://knoodlepot.github.io',
   GAME_URL.replace(/\/$/, ''),
 ];
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (req.method === 'GET') {
@@ -147,158 +265,230 @@ function getIP(req) {
     || 'unknown';
 }
 
+// ════════════════════════════════════════════════════════════
+// ROUTES
+// ════════════════════════════════════════════════════════════
+
 // ── Health check ───────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'Aethermoor API Proxy', patreonConfigured: !!(PATREON_CLIENT_ID && PATREON_CLIENT_SECRET) });
-});
-
-// ════════════════════════════════════════════════════════════
-// PATREON OAUTH
-// ════════════════════════════════════════════════════════════
-
-// Step 1 — Game navigates to this URL → we redirect to Patreon login
-app.get('/auth/patreon', (req, res) => {
-  if (!PATREON_CLIENT_ID || !PATREON_REDIRECT_URI) {
-    return res.status(503).send('Patreon OAuth is not configured on this server.');
-  }
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id:     PATREON_CLIENT_ID,
-    redirect_uri:  PATREON_REDIRECT_URI,
-    scope:         'identity identity.memberships',
-    state:         generateToken().slice(0, 16),
+  res.json({
+    status:   'ok',
+    service:  'Aethermoor API Server v2.0',
+    features: ['token-tracking', 'stripe-payments', 'anthropic-proxy'],
   });
-  res.redirect(`https://www.patreon.com/oauth2/authorize?${params}`);
 });
 
-// Step 2 — Patreon redirects back here after login
-app.get('/auth/patreon/callback', async (req, res) => {
-  const { code, error } = req.query;
-  if (error || !code) return res.redirect(`${GAME_URL}?auth=cancelled`);
-
+// ── Check token balance ────────────────────────────────────────
+// Game calls this on load to sync with the server balance.
+// GET /tokens/balance?playerId=abc123
+app.get('/tokens/balance', async (req, res) => {
+  const { playerId } = req.query;
+  if (!playerId || playerId.length > 64) {
+    return res.status(400).json({ error: 'playerId required' });
+  }
   try {
-    // Exchange code for access token
-    const tokenRes = await fetch('https://www.patreon.com/api/oauth2/token', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body:    new URLSearchParams({
-        code,
-        grant_type:    'authorization_code',
-        client_id:     PATREON_CLIENT_ID,
-        client_secret: PATREON_CLIENT_SECRET,
-        redirect_uri:  PATREON_REDIRECT_URI,
-      }),
+    const balance = await getBalance(playerId);
+    res.json({ playerId, balance });
+  } catch (err) {
+    console.error('Balance error:', err.message);
+    res.status(500).json({ error: 'Could not fetch balance' });
+  }
+});
+
+// ── List token packages ────────────────────────────────────────
+// Game calls this to show the shop to the player.
+app.get('/tokens/packages', (req, res) => {
+  const packages = Object.entries(TOKEN_PACKAGES).map(([id, p]) => ({
+    id,
+    name:         p.name,
+    tokens:       p.tokens,
+    amount_pence: p.amount_pence,
+    price_gbp:    '£' + (p.amount_pence / 100).toFixed(2),
+    description:  p.description,
+  }));
+  res.json({ packages });
+});
+
+// ── Create Stripe checkout ────────────────────────────────────
+// Game calls this when player clicks "Buy tokens".
+// Returns a URL — game redirects the player to it.
+// After payment, Stripe sends us a webhook (below) and we add the tokens.
+// POST /tokens/buy  { playerId, packageId }
+app.post('/tokens/buy', async (req, res) => {
+  const { playerId, packageId } = req.body || {};
+  if (!playerId || !packageId) {
+    return res.status(400).json({ error: 'playerId and packageId required' });
+  }
+  const pkg = TOKEN_PACKAGES[packageId];
+  if (!pkg) {
+    return res.status(400).json({ error: 'Unknown package. Options: ' + Object.keys(TOKEN_PACKAGES).join(', ') });
+  }
+  if (pkg.price_id.includes('REPLACE_WITH')) {
+    return res.status(503).json({ error: 'Stripe price IDs not set up yet. See setup comments at top of server.js.' });
+  }
+  try {
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{ price: pkg.price_id, quantity: 1 }],
+      mode:        'payment',
+      success_url: `${GAME_URL}?payment=success&tokens=${pkg.tokens}`,
+      cancel_url:  `${GAME_URL}?payment=cancelled`,
+      metadata: {
+        player_id:    playerId,
+        package_id:   packageId,
+        tokens:       String(pkg.tokens),
+        amount_pence: String(pkg.amount_pence),
+      },
     });
-    if (!tokenRes.ok) {
-      console.error('Token exchange failed:', await tokenRes.text());
-      return res.redirect(`${GAME_URL}?auth=error`);
-    }
-    const { access_token } = await tokenRes.json();
-
-    // Fetch user identity and memberships
-    const identityRes = await fetch(
-      'https://www.patreon.com/api/oauth2/v2/identity' +
-      '?include=memberships.currently_entitled_tiers' +
-      '&fields[user]=full_name' +
-      '&fields[member]=patron_status,last_charge_status,currently_entitled_amount_cents' +
-      '&fields[tier]=title',
-      { headers: { Authorization: `Bearer ${access_token}` } }
+    await db.query(
+      'INSERT INTO purchases (id, player_id, stripe_session_id, tokens_awarded, amount_pence) VALUES ($1, $2, $3, $4, $5)',
+      [session.id, playerId, session.id, pkg.tokens, pkg.amount_pence]
     );
-    if (!identityRes.ok) {
-      console.error('Identity fetch failed:', await identityRes.text());
-      return res.redirect(`${GAME_URL}?auth=error`);
-    }
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('Stripe error:', err.message);
+    res.status(500).json({ error: 'Could not create payment. Please try again.' });
+  }
+});
 
-    const identity = await identityRes.json();
-    const patreonUserId = identity.data?.id;
-    const included = identity.included || [];
+// ── Stripe webhook ─────────────────────────────────────────────
+// Stripe calls this automatically after payment succeeds.
+// This is where tokens actually land in the player's account.
+app.post('/stripe/webhook', async (req, res) => {
+  let event;
+  try {
+    event = STRIPE_WEBHOOK_SECRET
+      ? stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET)
+      : JSON.parse(req.body.toString());
+  } catch (err) {
+    console.error('Webhook verification failed:', err.message);
+    return res.status(400).json({ error: 'Invalid signature' });
+  }
 
-    // Work out if they're an active, paid-up patron and what tier they're on
-    let isSubscriber = false;
-    let tierTitle    = 'Wanderer';
+  if (event.type === 'checkout.session.completed') {
+    const session  = event.data.object;
+    const playerId = session.metadata?.player_id;
+    const tokens   = parseInt(session.metadata?.tokens || '0', 10);
+    const amount   = parseInt(session.metadata?.amount_pence || '0', 10);
+    const pkg      = session.metadata?.package_id || 'unknown';
 
-    const members = included.filter(i => i.type === 'member');
-    const tiers   = included.filter(i => i.type === 'tier');
-
-    for (const member of members) {
-      const attrs = member.attributes || {};
-      if (attrs.patron_status === 'active_patron' && attrs.last_charge_status === 'Paid') {
-        isSubscriber = true;
-
-        // Try to find the tier title
-        const entitledTiers = member.relationships?.currently_entitled_tiers?.data || [];
-        if (entitledTiers.length > 0) {
-          const tierObj = tiers.find(t => t.id === entitledTiers[0].id);
-          tierTitle = tierObj?.attributes?.title || 'Tavern Regular';
-        } else {
-          // Paying but no specific tier found — give base access
-          tierTitle = 'Tavern Regular';
-        }
-        break;
+    if (playerId && tokens > 0) {
+      try {
+        await addTokens(playerId, tokens, `purchase_${pkg}`);
+        await db.query(
+          'UPDATE purchases SET status = $1 WHERE stripe_session_id = $2',
+          ['completed', session.id]
+        );
+        await db.query(
+          'UPDATE players SET total_spent = total_spent + $1 WHERE player_id = $2',
+          [amount, playerId]
+        );
+        const balance = await getBalance(playerId);
+        console.log(`Payment complete: player ${playerId} bought ${tokens} tokens (£${(amount/100).toFixed(2)}) | balance now ${balance}`);
+      } catch (err) {
+        console.error('Webhook DB error:', err.message);
       }
     }
-
-    // Create session and redirect back to game with token in URL
-    const sessionToken = createSession(patreonUserId, isSubscriber, tierTitle);
-    console.log(`Auth OK — user ${patreonUserId} | subscriber: ${isSubscriber} | tier: ${tierTitle}`);
-
-    // Game picks up ?session=TOKEN from the URL on load
-    res.redirect(`${GAME_URL}?session=${sessionToken}&tier=${encodeURIComponent(tierTitle)}&subscriber=${isSubscriber}`);
-
-  } catch (err) {
-    console.error('Patreon callback error:', err.message);
-    res.redirect(`${GAME_URL}?auth=error`);
   }
+  res.json({ received: true });
 });
 
-// Step 3 — Game calls this on load to verify a stored session token
-app.post('/auth/verify', (req, res) => {
-  const { token } = req.body || {};
-  const session = getSession(token);
-  if (!session) return res.json({ valid: false, isSubscriber: false, tier: 'Wanderer' });
-  res.json({ valid: true, isSubscriber: session.isSubscriber, tier: session.tier });
-});
-
-// Step 4 — Log out
-app.post('/auth/logout', (req, res) => {
-  const { token } = req.body || {};
-  if (token) sessions.delete(token);
-  res.json({ ok: true });
-});
-
-// ════════════════════════════════════════════════════════════
-// ANTHROPIC PROXY
-// ════════════════════════════════════════════════════════════
-
+// ── Anthropic proxy with token deduction ─────────────────────
+// Every AI turn goes through here.
+// POST /api/claude  { playerId, model?, max_tokens?, system, messages }
 app.post('/api/claude', async (req, res) => {
-  const ip   = getIP(req);
-  const type = req.body?.type || 'narrator';
+  const ip       = getIP(req);
+  const playerId = req.body?.playerId;
 
-  const limitCheck = isRateLimited(ip, type === 'screen' ? 'screen' : 'narrator');
-  if (limitCheck.limited) return res.status(429).json({ error: 'rate_limited', message: limitCheck.reason });
+  if (!playerId || typeof playerId !== 'string' || playerId.length > 64) {
+    return res.status(400).json({ error: 'invalid_request', message: 'playerId required' });
+  }
 
-  const { model, max_tokens, system, messages } = req.body;
+  const limitCheck = isRateLimited(ip);
+  if (limitCheck.limited) {
+    return res.status(429).json({ error: 'rate_limited', message: limitCheck.reason });
+  }
+
+  // Check token balance and deduct 1
+  const spend = await spendToken(playerId);
+  if (!spend.success) {
+    return res.status(402).json({
+      error:     'no_tokens',
+      message:   'No tokens remaining. Buy more to keep adventuring!',
+      remaining: spend.remaining,
+    });
+  }
+
+  const { messages, system, max_tokens } = req.body;
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    await addTokens(playerId, 1, 'refund_bad_request');
     return res.status(400).json({ error: 'invalid_request', message: 'messages array required' });
   }
 
   try {
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-      body:    JSON.stringify({ model: model || 'claude-sonnet-4-20250514', max_tokens: max_tokens || 900, system: system || '', messages }),
+    const { status, data } = await callAnthropic({
+      model:      'claude-haiku-4-5-20251001',  // Haiku: 0.37p/turn vs 1.1p for Sonnet — same quality for RPG narration
+      max_tokens: max_tokens || 900,
+      system:     system || '',
+      messages,
     });
-    const data = await anthropicRes.json();
-    if (anthropicRes.ok) recordCall(ip, type === 'screen' ? 'screen' : 'narrator');
-    return res.status(anthropicRes.status).json(data);
+
+    if (status !== 200) {
+      // Anthropic error — refund the token so the player isn't penalised
+      await addTokens(playerId, 1, 'refund_api_error');
+      console.error(`Anthropic error ${status}:`, JSON.stringify(data).slice(0, 200));
+    } else {
+      recordCall(ip);
+    }
+
+    // Attach remaining balance to the response so the game can update its display
+    return res.status(status).json({ ...data, tokenBalance: spend.remaining });
+
   } catch (err) {
-    console.error('Anthropic proxy error:', err.message);
-    return res.status(502).json({ error: 'upstream_error', message: 'Could not reach the AI service. Please try again.' });
+    await addTokens(playerId, 1, 'refund_network_error');
+    console.error('Proxy error:', err.message);
+    return res.status(502).json({ error: 'upstream_error', message: 'Could not reach the AI. Please try again.' });
   }
 });
 
-// ── Start ──────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`Aethermoor server running on port ${PORT}`);
-  console.log(`Anthropic: ${ANTHROPIC_KEY ? 'OK' : 'MISSING'} | Patreon: ${PATREON_CLIENT_ID ? 'OK' : 'not configured'} | Game URL: ${GAME_URL}`);
+// ── Admin stats (password protected) ─────────────────────────
+// Visit /admin/stats?secret=YOUR_SESSION_SECRET to see your numbers.
+app.get('/admin/stats', async (req, res) => {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || req.query.secret !== secret) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const [players, calls24h, revenue, purchases] = await Promise.all([
+      db.query('SELECT COUNT(*) FROM players'),
+      db.query("SELECT COUNT(*) FROM token_log WHERE reason = 'ai_turn' AND created_at > NOW() - INTERVAL '24 hours'"),
+      db.query('SELECT SUM(total_spent) FROM players'),
+      db.query("SELECT COUNT(*), SUM(amount_pence) FROM purchases WHERE status = 'completed'"),
+    ]);
+    res.json({
+      total_players:       parseInt(players.rows[0].count),
+      ai_turns_last_24h:   parseInt(calls24h.rows[0].count),
+      total_revenue_pence: parseInt(revenue.rows[0].sum || 0),
+      total_revenue_gbp:   '£' + ((revenue.rows[0].sum || 0) / 100).toFixed(2),
+      completed_purchases: parseInt(purchases.rows[0].count),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// START
+// ════════════════════════════════════════════════════════════
+initDb().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Aethermoor server on port ${PORT}`);
+    console.log(`  Anthropic: ${ANTHROPIC_KEY ? 'OK' : 'MISSING'}`);
+    console.log(`  Stripe:    ${process.env.STRIPE_SECRET_KEY ? 'OK' : 'not configured'}`);
+    console.log(`  Database:  ${process.env.DATABASE_URL ? 'OK' : 'MISSING'}`);
+    console.log(`  Game URL:  ${GAME_URL}`);
+  });
+}).catch(err => {
+  console.error('Database init failed:', err.message);
+  process.exit(1);
 });
