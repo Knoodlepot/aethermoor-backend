@@ -266,15 +266,12 @@ app.use((req, res, next) => {
 function requireGameOrigin(req, res, next) {
   const origin  = req.headers.origin  || '';
   const referer = req.headers.referer || '';
-  const token   = req.headers['x-game-token'] || req.body?.['_gt'] || '';
-
   const originOk  = !origin  || ALLOWED_ORIGINS.some(o => origin.startsWith(o));
   const refererOk = !referer || referer.startsWith('https://knoodlepot.github.io');
-  const tokenOk   = !GAME_TOKEN || token === GAME_TOKEN;
-
-  if (!originOk || !refererOk || !tokenOk) {
-    const why = !originOk ? 'origin' : !refererOk ? 'referer' : 'token';
-    console.warn('[BLOCKED] why=' + why + ' origin=' + origin + ' referer=' + referer + ' tokenOk=' + tokenOk + ' ip=' + getIP(req));
+  // Token check removed — origin + referer checks are sufficient
+  if (!originOk || !refererOk) {
+    const why = !originOk ? 'origin' : 'referer';
+    console.warn('[BLOCKED] why=' + why + ' origin=' + origin + ' referer=' + referer + ' ip=' + getIP(req));
     return res.status(403).json({ error: 'forbidden', message: 'Unauthorised request: ' + why + ' check failed.' });
   }
   next();
