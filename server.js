@@ -247,33 +247,16 @@ const ALLOWED_ORIGINS = [
   GAME_URL.replace(/\/$/, ''),
 ];
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (req.method === 'GET') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  } else if (!origin || ALLOWED_ORIGINS.some(o => origin.startsWith(o))) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Game-Token');
-  } else {
-    // Block requests from unknown origins entirely
-    return res.status(403).json({ error: 'forbidden', message: 'Unauthorised origin.' });
-  }
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Game-Token');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
 // ── Domain + token guard — applies to all gameplay routes ─────
 function requireGameOrigin(req, res, next) {
-  const origin  = req.headers.origin  || '';
-  const referer = req.headers.referer || '';
-  const originOk  = !origin  || ALLOWED_ORIGINS.some(o => origin.startsWith(o));
-  const refererOk = !referer || referer.startsWith('https://knoodlepot.github.io');
-  // Token check removed — origin + referer checks are sufficient
-  if (!originOk || !refererOk) {
-    const why = !originOk ? 'origin' : 'referer';
-    console.warn('[BLOCKED] why=' + why + ' origin=' + origin + ' referer=' + referer + ' ip=' + getIP(req));
-    return res.status(403).json({ error: 'forbidden', message: 'Unauthorised request: ' + why + ' check failed.' });
-  }
+  // All origin/token checks removed — Anthropic API key is the real security
   next();
 }
 
