@@ -3848,7 +3848,7 @@ function QuickActions({ player, onCommand, isLoading, T, tf }) {
 }
 
 
-function WorldMap({ player, T, tf, onClose }) {
+function WorldMap({ player, T, tf, onClose, inline }) {
   const canvasRef = React.useRef(null);
   const W = 920, H = 620;
   const MAP_W = 700, MAP_H = 580, MAP_X = 10, MAP_Y = 10;
@@ -4111,6 +4111,16 @@ function WorldMap({ player, T, tf, onClose }) {
 
   }, [player]);
 
+    if (inline) {
+    return React.createElement('div', {
+      style:{ width:'100%', height:'100%', position:'relative', background:'#080608' }
+    },
+      React.createElement('canvas', {
+        ref: canvasRef, width: W, height: H,
+        style:{ display:'block', width:'100%', height:'100%', objectFit:'contain' }
+      })
+    );
+  }
   return React.createElement('div', {
     style:{
       position:'fixed',top:0,left:0,width:'100%',height:'100%',
@@ -4284,6 +4294,7 @@ function AethermoorRPG() {
   const [narrative, setNarrative] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
+  const [leftTab, setLeftTab] = useState("story");
   const [dungeonWarningOpen, setDungeonWarningOpen] = useState(false);
   const [dungeonExitPrompt, setDungeonExitPrompt] = useState(false);
   const [legacyGravestones, setLegacyGravestones] = useState([]);
@@ -6265,35 +6276,32 @@ React.createElement("button", { onClick: clearSave, style: { background: "transp
         .ability-tooltip{animation:slideIn 0.15s ease;}
         .cmd-wrap:hover .cmd-tooltip{display:block !important;}
         .cmd-tooltip{animation:slideIn 0.15s ease;}
-      `), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1/-1", background: T.panelAlt, borderBottom: `1px solid ${T.border}`, padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.gold, fontSize: 18, letterSpacing: 3 } }, "\u2694 AETHERMOOR"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12 } }, levelUpMsg && /* @__PURE__ */ React.createElement("div", { style: { color: "#ffffff", fontSize: 13, animation: "pulse 1s infinite", ...tf, textShadow: `0 0 12px ${T.gold}` } }, levelUpMsg), ["town", "npc"].includes(player?.context) && /* @__PURE__ */ React.createElement("button", { onClick: () => setShowShop(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u{1F6D2} Shop"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowInventory(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u{1F392} Gear"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowQuestLog(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1, position: "relative" } }, "\u{1F4DC} Quests", (player?.quests || []).filter((q) => q.status === "active").length > 0 && /* @__PURE__ */ React.createElement("span", { style: { position: "absolute", top: -4, right: -4, background: T.accent, color: T.bg, borderRadius: "50%", width: 14, height: 14, fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center" } }, (player?.quests || []).filter((q) => q.status === "active").length)), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowStandings(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u2B50 Rep"),
-      /* @__PURE__ */ React.createElement("button", {
-        onClick: () => player?.location === "Aethermoor Capital" && !player?.dungeon ? setDungeonWarningOpen(true) : null,
-        title: player?.location === "Aethermoor Capital" ? (player?.dungeon ? "Already in the dungeon" : "Enter the Dungeon of Echoes") : "Travel to Aethermoor Capital to access the Dungeon of Echoes",
-        style: {
-          background: player?.location === "Aethermoor Capital" && !player?.dungeon ? "rgba(100,20,20,0.35)" : "transparent",
-          border: `1px solid ${player?.location === "Aethermoor Capital" && !player?.dungeon ? "#c03030" : T.border}`,
-          color: player?.location === "Aethermoor Capital" && !player?.dungeon ? "#e06060" : "#444",
-          padding: "4px 10px", fontSize: 11,
-          cursor: player?.location === "Aethermoor Capital" && !player?.dungeon ? "pointer" : "not-allowed",
-          fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1,
-          animation: player?.location === "Aethermoor Capital" && !player?.dungeon && !player?.dungeon ? "pulse 1.2s infinite" : "none",
-          opacity: player?.location === "Aethermoor Capital" ? 1 : 0.35,
-          transition: "all 0.3s"
-        }
-      }, "\u{1F573}\uFE0F Dungeon"), /* @__PURE__ */ React.createElement("button", { onClick: () => setScreen("title"), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u{1F441} Vision"), /* @__PURE__ */ React.createElement("div", { onClick: () => setScreen("title"), style: { display: "flex", alignItems: "center", gap: 5, cursor: "pointer", padding: "4px 10px", border: `1px solid ${tokenBorder(tokens)}`, background: tokens <= 10 ? "#e0404022" : "transparent", transition: "all 0.2s" }, title: "Buy more tokens" },
+      `), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1/-1", background: T.panelAlt, borderBottom: `1px solid ${T.border}`, padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.gold, fontSize: 18, letterSpacing: 3 } }, "\u2694 AETHERMOOR"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12 } }, levelUpMsg && /* @__PURE__ */ React.createElement("div", { style: { color: "#ffffff", fontSize: 13, animation: "pulse 1s infinite", ...tf, textShadow: `0 0 12px ${T.gold}` } }, levelUpMsg), /* @__PURE__ */ React.createElement("button", { onClick: () => setScreen("title"), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u{1F441} Vision"), /* @__PURE__ */ React.createElement("div", { onClick: () => setScreen("title"), style: { display: "flex", alignItems: "center", gap: 5, cursor: "pointer", padding: "4px 10px", border: `1px solid ${tokenBorder(tokens)}`, background: tokens <= 10 ? "#e0404022" : "transparent", transition: "all 0.2s" }, title: "Buy more tokens" },
   React.createElement("span", null, "\u{1FA99}"),
   React.createElement("span", { style: { ...tf, fontSize: 12, color: tokenColor(tokens), fontWeight: tokens <= 20 ? "bold" : "normal", animation: tokens <= 10 ? "pulse 1s infinite" : "none" } }, tokens, " tokens")
-), /* @__PURE__ */ React.createElement("button", { onClick: clearSave, style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "New Game"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", overflow: "hidden", flex: 1, minHeight: 0 } }, /* @__PURE__ */ React.createElement("div", { ref: logRef, style: { flex: 1, overflowY: "auto", padding: 20 } }, narrative && /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: isDyslexic ? 24 : 18, marginBottom: 10, animation: "slideIn 0.4s ease", lineHeight: 1.9, fontSize: 15, color: T.text, whiteSpace: "pre-wrap", ...dyxNarr } }, narrative), log.slice(-15).filter((l) => l.type !== "narrative").map((entry, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { fontSize: 12, color: entry.type === "choice" ? T.choiceColor : entry.type === "xp" ? T.xpColor : T.systemText, fontStyle: entry.type === "system" ? "italic" : "normal", marginBottom: 3, paddingLeft: entry.type === "choice" ? 8 : 0, borderLeft: entry.type === "choice" ? `2px solid ${T.choiceColor}44` : "none" } }, entry.text)), isLoading && /* @__PURE__ */ React.createElement("div", { style: { color: T.textFaint, fontSize: 14, fontStyle: "italic", animation: "pulse 1.5s infinite", padding: "8px 0" } }, "The Fates are weaving your story...")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flex: 1, minHeight: 0, borderTop: `1px solid ${T.border}` } }, player && /* @__PURE__ */ React.createElement("div", { style: { width: "55%", flexShrink: 0, display: "flex", flexDirection: "column" } }, /* @__PURE__ */ React.createElement(PixelScene, { context: player?.context, weather, isLoading, T, diceState })), player && /* @__PURE__ */ React.createElement("button", {
-        onClick: () => setMapOpen(true),
-        style: {
-          display: "flex", alignItems: "center", gap: 6, justifyContent: "center",
-          background: T.panelAlt, border: "1px solid " + T.border,
-          borderTop: "none", color: T.accent, padding: "6px 12px",
-          cursor: "pointer", fontFamily: "Cinzel,serif", fontSize: 11,
-          letterSpacing: 1, flexShrink: 0, width: "100%",
-          transition: "background 0.2s"
-        }
-      }, "🗺️  Open Map"),
+), /* @__PURE__ */ React.createElement("button", { onClick: clearSave, style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "New Game"))), /* /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", overflow: "hidden", flex: 1, minHeight: 0 } },
+            /* Story tab */
+      leftTab === "story" && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" } },
+        /* @__PURE__ */ React.createElement("div", { ref: logRef, style: { flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column" } }, narrative && /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: isDyslexic ? 24 : 18, marginBottom: 10, animation: "slideIn 0.4s ease", lineHeight: 1.9, fontSize: 15, color: T.text, whiteSpace: "pre-wrap", flex: 1, ...dyxNarr } }, narrative), log.slice(-15).filter((l) => l.type !== "narrative").map((entry, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { fontSize: 12, color: entry.type === "choice" ? T.choiceColor : entry.type === "xp" ? T.xpColor : T.systemText, fontStyle: entry.type === "system" ? "italic" : "normal", marginBottom: 3, paddingLeft: entry.type === "choice" ? 8 : 0, borderLeft: entry.type === "choice" ? `2px solid ${T.choiceColor}44` : "none" } }, entry.text)), isLoading && /* @__PURE__ */ React.createElement("div", { style: { color: T.textFaint, fontSize: 14, fontStyle: "italic", animation: "pulse 1.5s infinite", padding: "8px 0" } }, "The Fates are weaving your story..."))
+      ),
+      /* Map tab */
+      leftTab === "map" && player && /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minHeight: 0, overflow: "hidden", position: "relative" } },
+        /* @__PURE__ */ React.createElement(WorldMap, { player, T, tf, onClose: null, inline: true })
+      ),
+      /* Tab toggles */
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexShrink: 0, borderTop: `1px solid ${T.border}` } },
+        /* @__PURE__ */ React.createElement("button", {
+          onClick: () => setLeftTab("story"),
+          style: { flex: 1, padding: "9px 0", background: leftTab === "story" ? T.panelAlt : "transparent", border: "none", borderRight: `1px solid ${T.border}`, color: leftTab === "story" ? T.gold : T.textMuted, cursor: "pointer", fontFamily: "Cinzel,serif", fontSize: 11, letterSpacing: 1.5, transition: "all 0.2s" }
+        }, "📖  Story"),
+        /* @__PURE__ */ React.createElement("button", {
+          onClick: () => setLeftTab("map"),
+          style: { flex: 1, padding: "9px 0", background: leftTab === "map" ? T.panelAlt : "transparent", border: "none", color: leftTab === "map" ? T.gold : T.textMuted, cursor: "pointer", fontFamily: "Cinzel,serif", fontSize: 11, letterSpacing: 1.5, transition: "all 0.2s" }
+        }, "🗺️  Map")
+      ),
+      /* Input bar */
+      player && /* @__PURE__ */ React.createElement(InputBar, { player, onFreeText: handleCommand, isLoading, T, tf, isDyslexic }),
+      /* Modals */
       mapOpen && player && /* @__PURE__ */ React.createElement(WorldMap, { player, T, tf, onClose: () => setMapOpen(false) }),
       /* ── Dungeon Warning Modal ── */
       dungeonWarningOpen && /* @__PURE__ */ React.createElement("div", {
@@ -6362,7 +6370,8 @@ React.createElement("button", { onClick: clearSave, style: { background: "transp
             }, "🪜  Surface & Bank")
           )
         )
-      )), player && /* @__PURE__ */ React.createElement(InputBar, { player, onFreeText: handleCommand, isLoading, T, tf, isDyslexic })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", overflow: "hidden", borderLeft: `1px solid ${T.border}` } }, /* @__PURE__ */ React.createElement("div", { style: { background: T.panel, borderTop: `1px solid ${T.border}`, padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 } }, player && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 14, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 4 } }, CLASSES[player.class].icon), /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.gold, fontSize: 16 } }, player.name), /* @__PURE__ */ React.createElement("div", { style: { color: T.accent, fontSize: 12, letterSpacing: 1, marginTop: 2 } }, player.class, " \xB7 Lv.", player.level)), /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 12 } }, /* @__PURE__ */ React.createElement(StatBar, { label: "\u2764\uFE0F HP", value: player.hp, max: player.maxHp, color: T.hpColor, textMuted: T.textMuted }), /* @__PURE__ */ React.createElement(StatBar, { label: "\u2728 XP", value: Math.max(0, player.xp - XP_TABLE[player.level - 1]), max: Math.max(1, xpForNextLevel(player.level) - XP_TABLE[player.level - 1]), color: T.xpColor, textMuted: T.textMuted }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: T.textFaint, textAlign: "right", marginTop: 2 } }, "Next: ", xpForNextLevel(player.level), " XP")), /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.accent, fontSize: 11, letterSpacing: 2, marginBottom: 10 } }, "ATTRIBUTES"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } }, [["STR", "str"], ["AGI", "agi"], ["INT", "int"], ["WIL", "wil"]].map(([label, key]) => /* @__PURE__ */ React.createElement("div", { key, style: { display: "flex", alignItems: "center", justifyContent: "space-between", background: T.panel, padding: "6px 8px", border: `1px solid ${T.border}` } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: T.textMuted } }, label), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { color: T.gold, fontSize: 15, ...tf } }, player[key]), (player.statPoints || 0) > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => applyStatPoint(key), style: { background: T.accent + "33", border: `1px solid ${T.accent}`, color: T.accent, width: 18, height: 18, fontSize: 12, cursor: "pointer", padding: 0, lineHeight: 1 } }, "+"))))), (player.statPoints || 0) > 0 && /* @__PURE__ */ React.createElement("div", { style: { color: T.gold, fontSize: 12, textAlign: "center", animation: "pulse 1.5s infinite" } }, "\u2B06 ", player.statPoints, " stat points!")), /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 12, display: "flex", justifyContent: "space-around" } }, [["\u{1FA99}", player.gold, "Gold"], ["\u{1F392}", countRations(player.inventory), "Rations"], ["\u2B50", player.reputation, "Rep"], ["📍", player.location, "Here"]].map(([icon, val, label]) => /* @__PURE__ */ React.createElement("div", { key: label, style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { color: label === "Rations" ? val > 0 ? "#80a060" : "#c05050" : label === "Here" ? T.accent : T.gold, fontSize: label === "Here" ? 8 : 17, lineHeight: 1.2, ...tf } }, val), /* @__PURE__ */ React.createElement("div", { style: { color: T.textMuted, fontSize: 11 } }, icon, " ", label)))), /* @__PURE__ */ React.createElement(MainQuestPanel, { worldSeed, T, tf }), worldSeed?.mainQuestComplete && player._pendingLegacyItem && /* @__PURE__ */ React.createElement("div", { style: { background: "#0a0a1a", border: `1px solid ${T.gold}`, padding: 10, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.gold, fontSize: 10, letterSpacing: 2, marginBottom: 6 } }, "\u{1F3C6} QUEST COMPLETE"), /* @__PURE__ */ React.createElement(
+      )),
+/* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", overflow: "hidden", borderLeft: `1px solid ${T.border}` } }, /* @__PURE__ */ React.createElement("div", { style: { background: T.panel, borderTop: `1px solid ${T.border}`, padding: 12, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 } }, player && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 14, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 4 } }, CLASSES[player.class].icon), /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.gold, fontSize: 16 } }, player.name), /* @__PURE__ */ React.createElement("div", { style: { color: T.accent, fontSize: 12, letterSpacing: 1, marginTop: 2 } }, player.class, " \xB7 Lv.", player.level)), /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 12 } }, /* @__PURE__ */ React.createElement(StatBar, { label: "\u2764\uFE0F HP", value: player.hp, max: player.maxHp, color: T.hpColor, textMuted: T.textMuted }), /* @__PURE__ */ React.createElement(StatBar, { label: "\u2728 XP", value: Math.max(0, player.xp - XP_TABLE[player.level - 1]), max: Math.max(1, xpForNextLevel(player.level) - XP_TABLE[player.level - 1]), color: T.xpColor, textMuted: T.textMuted }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: T.textFaint, textAlign: "right", marginTop: 2 } }, "Next: ", xpForNextLevel(player.level), " XP")), /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.accent, fontSize: 11, letterSpacing: 2, marginBottom: 10 } }, "ATTRIBUTES"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } }, [["STR", "str"], ["AGI", "agi"], ["INT", "int"], ["WIL", "wil"]].map(([label, key]) => /* @__PURE__ */ React.createElement("div", { key, style: { display: "flex", alignItems: "center", justifyContent: "space-between", background: T.panel, padding: "6px 8px", border: `1px solid ${T.border}` } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: T.textMuted } }, label), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { color: T.gold, fontSize: 15, ...tf } }, player[key]), (player.statPoints || 0) > 0 && /* @__PURE__ */ React.createElement("button", { onClick: () => applyStatPoint(key), style: { background: T.accent + "33", border: `1px solid ${T.accent}`, color: T.accent, width: 18, height: 18, fontSize: 12, cursor: "pointer", padding: 0, lineHeight: 1 } }, "+"))))), (player.statPoints || 0) > 0 && /* @__PURE__ */ React.createElement("div", { style: { color: T.gold, fontSize: 12, textAlign: "center", animation: "pulse 1.5s infinite" } }, "\u2B06 ", player.statPoints, " stat points!")), /* @__PURE__ */ React.createElement("div", { style: { background: T.panelAlt, border: `1px solid ${T.border}`, padding: 12, display: "flex", justifyContent: "space-around" } }, [["\u{1FA99}", player.gold, "Gold"], ["\u{1F392}", countRations(player.inventory), "Rations"], ["\u2B50", player.reputation, "Rep"], ["📍", player.location, "Here"]].map(([icon, val, label]) => /* @__PURE__ */ React.createElement("div", { key: label, style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { color: label === "Rations" ? val > 0 ? "#80a060" : "#c05050" : label === "Here" ? T.accent : T.gold, fontSize: label === "Here" ? 8 : 17, lineHeight: 1.2, ...tf } }, val), /* @__PURE__ */ React.createElement("div", { style: { color: T.textMuted, fontSize: 11 } }, icon, " ", label)))), /* @__PURE__ */ React.createElement(MainQuestPanel, { worldSeed, T, tf }), worldSeed?.mainQuestComplete && player._pendingLegacyItem && /* @__PURE__ */ React.createElement("div", { style: { background: "#0a0a1a", border: `1px solid ${T.gold}`, padding: 10, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { ...tf, color: T.gold, fontSize: 10, letterSpacing: 2, marginBottom: 6 } }, "\u{1F3C6} QUEST COMPLETE"), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => setShowNGPlusScreen(true),
@@ -6418,7 +6427,31 @@ React.createElement("button", { onClick: clearSave, style: { background: "transp
       padding: "12px 14px",
       boxShadow: `0 4px 20px #00000088`
     } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 5 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 18 } }, info.icon), /* @__PURE__ */ React.createElement("span", { style: { color: T.gold, fontSize: 13, fontFamily: "'Cinzel','Palatino Linotype',serif" } }, item)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: T.accent, letterSpacing: 1, marginBottom: 6, fontFamily: "'Cinzel','Palatino Linotype',serif" } }, info.type.toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: T.text, lineHeight: 1.7, fontFamily: "'Crimson Text',Georgia,serif" } }, info.desc)));
-  }))))
+  })))),
+  player && /* @__PURE__ */ React.createElement("div", {
+    style: {
+      display: "flex", flexShrink: 0, borderTop: `1px solid ${T.border}`,
+      padding: "6px 8px", gap: 4, flexWrap: "wrap", justifyContent: "center",
+      background: T.panelAlt
+    }
+  },
+    ["town", "npc"].includes(player?.context) && /* @__PURE__ */ React.createElement("button", { onClick: () => setShowShop(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u{1F6D2} Shop"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowInventory(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u{1F392} Gear"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowQuestLog(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1, position: "relative" } }, "\u{1F4DC} Quests", (player?.quests || []).filter((q) => q.status === "active").length > 0 && /* @__PURE__ */ React.createElement("span", { style: { position: "absolute", top: -4, right: -4, background: T.accent, color: T.bg, borderRadius: "50%", width: 14, height: 14, fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center" } }, (player?.quests || []).filter((q) => q.status === "active").length)), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowStandings(true), style: { background: "transparent", border: `1px solid ${T.accent}`, color: T.gold, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1 } }, "\u2B50 Rep"),
+      /* @__PURE__ */ React.createElement("button", {
+        onClick: () => player?.location === "Aethermoor Capital" && !player?.dungeon ? setDungeonWarningOpen(true) : null,
+        title: player?.location === "Aethermoor Capital" ? (player?.dungeon ? "Already in the dungeon" : "Enter the Dungeon of Echoes") : "Travel to Aethermoor Capital to access the Dungeon of Echoes",
+        style: {
+          background: player?.location === "Aethermoor Capital" && !player?.dungeon ? "rgba(100,20,20,0.35)" : "transparent",
+          border: `1px solid ${player?.location === "Aethermoor Capital" && !player?.dungeon ? "#c03030" : T.border}`,
+          color: player?.location === "Aethermoor Capital" && !player?.dungeon ? "#e06060" : "#444",
+          padding: "4px 10px", fontSize: 11,
+          cursor: player?.location === "Aethermoor Capital" && !player?.dungeon ? "pointer" : "not-allowed",
+          fontFamily: "Cinzel,'Palatino Linotype',serif", letterSpacing: 1,
+          animation: player?.location === "Aethermoor Capital" && !player?.dungeon ? "pulse 1.2s infinite" : "none",
+          opacity: player?.location === "Aethermoor Capital" ? 1 : 0.35,
+          transition: "all 0.3s"
+        }
+      }, "\u{1F573}\uFE0F Dungeon")
+  ),
   )), showShop && player && /* @__PURE__ */ React.createElement(
     ShopScreen,
     {
