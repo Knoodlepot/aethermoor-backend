@@ -100,10 +100,12 @@ app.use(express.json());
 
 // ── Token packages ────────────────────────────────────────────
 const TOKEN_PACKAGES = {
-  starter:    { tokens: 100,  pence: 100,  label: '100 Tokens',  priceId: 'price_1T8kmJKvhVLecCSvf593COyi' },
-  adventurer: { tokens: 300,  pence: 250,  label: '300 Tokens',  priceId: 'price_1T8kmlKvhVLecCSvV6GQdjMh' },
-  hero:       { tokens: 750,  pence: 500,  label: '750 Tokens',  priceId: 'price_1T8kn5KvhVLecCSvmCtEMlx3' },
-  legend:     { tokens: 1500, pence: 999,  label: '1500 Tokens', priceId: 'price_1T8kntKvhVLecCSv8kd4Pkzu' },
+  starter:    { tokens: 100,   pence: 100,  label: '100 Tokens',    priceId: 'price_1T8kmJKvhVLecCSvf593COyi' },
+  adventurer: { tokens: 300,   pence: 250,  label: '300 Tokens',    priceId: 'price_1T8kmlKvhVLecCSvV6GQdjMh' },
+  hero:       { tokens: 750,   pence: 500,  label: '750 Tokens',    priceId: 'price_1T8kn5KvhVLecCSvmCtEMlx3' },
+  legend:     { tokens: 1500,  pence: 999,  label: '1500 Tokens',   priceId: 'price_1T8kntKvhVLecCSv8kd4Pkzu' },
+  champion:   { tokens: 3500,  pence: 1999, label: '3500 Tokens',   priceId: 'price_1T92wKKvhVLecCSvnhNCNVHc' },
+  immortal:   { tokens: 10000, pence: 4999, label: '10000 Tokens',  priceId: 'price_1T92yTKvhVLecCSvRqpaI9j2' },
 };
 
 // ── Rate limiter ──────────────────────────────────────────────
