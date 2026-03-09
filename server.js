@@ -265,6 +265,36 @@ app.post('/api/claude', async (req, res) => {
   }
 });
 
+// ── Admin: look up a player ───────────────────────────────────
+app.get('/admin/player', async (req, res) => {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || req.query.secret !== secret) return res.status(403).json({ error: 'Forbidden' });
+  const { playerId } = req.query;
+  if (!playerId) return res.status(400).json({ error: 'playerId required' });
+  try {
+    const r = await db.query('SELECT player_id, tokens FROM players WHERE player_id = $1', [playerId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Player not found' });
+    const log = await db.query(
+      'SELECT change, reason, created_at FROM token_log WHERE player_id = $1 ORDER BY created_at DESC LIMIT 10',
+      [playerId]
+    );
+    return res.json({ playerId: r.rows[0].player_id, balance: r.rows[0].tokens, recentLog: log.rows });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Admin: manually add tokens ────────────────────────────────
+app.post('/admin/add-tokens', async (req, res) => {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || req.body.secret !== secret) return res.status(403).json({ error: 'Forbidden' });
+  const { playerId, amount, note } = req.body;
+  if (!playerId || !amount || isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'playerId and positive amount required' });
+  try {
+    await addTokens(playerId, parseInt(amount), note ? `admin_gift: ${note}` : 'admin_gift');
+    const balance = await getBalance(playerId);
+    return res.json({ success: true, playerId, tokensAdded: parseInt(amount), newBalance: balance });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.get('/admin/stats', async (req, res) => {
   const secret = process.env.SESSION_SECRET;
   if (!secret || req.query.secret !== secret) {
