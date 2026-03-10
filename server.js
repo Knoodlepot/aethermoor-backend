@@ -338,6 +338,12 @@ function buildNarratorSystem(ctx) {
   const gold     = Math.max(0,              parseInt(p.gold)    || 0);
   const location = sanitiseStr(p.location,  60) || 'Aethermoor Capital';
   const rep      = Math.max(-999, Math.min(9999, parseInt(p.reputation) || 0));
+  const gameHour = Math.max(0, Math.min(23.99, parseFloat(p.gameHour) || 8));
+  const gameDay  = Math.max(1, parseInt(p.gameDay) || 1);
+  const h12raw   = gameHour === 0 ? 12 : gameHour > 12 ? gameHour - 12 : Math.floor(gameHour);
+  const hMin     = (gameHour % 1) >= 0.5 ? '30' : '00';
+  const hPeriod  = gameHour < 6 ? 'night' : gameHour < 12 ? 'morning' : gameHour < 17 ? 'afternoon' : gameHour < 21 ? 'evening' : 'night';
+  const timeStr  = `Day ${gameDay}, ${h12raw}:${hMin}${gameHour < 12 ? 'am' : 'pm'} (${hPeriod})`;
 
   const VALID_CONTEXTS = new Set(['explore','town','combat','npc','camp','dungeon']);
   const context  = VALID_CONTEXTS.has(p.context) ? p.context : 'explore';
@@ -355,8 +361,33 @@ function buildNarratorSystem(ctx) {
         .map(([slot, n]) => `${sanitiseStr(slot,20)}:${sanitiseStr(n,40)}`).join(', ') || 'none' : 'none';
 
   const knownNpcs = Array.isArray(p.knownNpcs)
-    ? p.knownNpcs.slice(0, 10)
-        .map(n => `${sanitiseStr(n.name,30)}(${sanitiseStr(n.role||'',20)},${sanitiseStr(n.relationship||'neutral',15)})`).join('; ') : '';
+    ? p.knownNpcs.slice(0, 10).map(n => {
+        const base = `${sanitiseStr(n.name,30)}(${sanitiseStr(n.role||'',20)},${sanitiseStr(n.relationship||'neutral',15)})`;
+        const metD = parseInt(n.metDay) || 0;
+        const metH = parseFloat(n.metHour) || 0;
+        if (!metD) return base;
+        const totalHours = (gameDay - metD) * 24 + (gameHour - metH);
+        const ago = totalHours < 1 ? 'just met' : totalHours < 24 ? `${Math.round(totalHours)}h ago` : `${Math.floor(totalHours / 24)}d ago`;
+        let travelNote = '';
+        if (n.travelDestination) {
+          const arrived = gameDay > n.travelArrivesDay || (gameDay === n.travelArrivesDay && gameHour >= (n.travelArrivesHour || 0));
+          travelNote = arrived
+            ? `[now in ${sanitiseStr(n.travelDestination, 30)}]`
+            : `[traveling to ${sanitiseStr(n.travelDestination, 30)}, arrives Day ${n.travelArrivesDay}]`;
+        }
+        return `${base}[met ${ago}]${travelNote}`;
+      }).join('; ') : '';
+
+  const scheduledEvents = Array.isArray(p.scheduledEvents) && p.scheduledEvents.length > 0
+    ? p.scheduledEvents.slice(0, 5).map(ev => {
+        const evH = Math.floor(ev.hour || 12);
+        const evMin = (ev.hour || 12) % 1 >= 0.5 ? '30' : '00';
+        const evAmPm = (ev.hour || 12) < 12 ? 'am' : 'pm';
+        const evH12 = evH === 0 ? 12 : evH > 12 ? evH - 12 : evH;
+        const overdue = ev.day < gameDay || (ev.day === gameDay && (ev.hour || 12) <= gameHour);
+        return `Day ${ev.day} ${evH12}:${evMin}${evAmPm} — ${sanitiseStr(ev.description || `Meet ${ev.npcName}`, 80)}${overdue ? ' [OVERDUE]' : ''}`;
+      }).join('; ')
+    : '';
 
   const villainName = sanitiseStr(w.villainName, 40);
   const questTitle  = sanitiseStr(w.questTitle,  60);
@@ -385,6 +416,8 @@ ABILITIES: ${abilities || 'none'}
 ACTIVE QUESTS: ${quests}
 CURRENT CONTEXT: ${context}
 ${knownNpcs ? `KNOWN NPCS: ${knownNpcs}` : ''}
+CURRENT TIME: ${timeStr}
+${scheduledEvents ? `UPCOMING EVENTS: ${scheduledEvents}` : ''}
 
 RULES:
 - Write vivid immersive fantasy prose, 2-3 paragraphs
@@ -411,6 +444,15 @@ RULES:
   - Act 5 (levels 17–19): Player rallies. Use the ACT 5 REVELATION to open the path to the lair. Final preparations, factions, gathering what's needed. When player is truly ready and the path is open: emit {"mainQuestAct":"6"}
   - Act 6 (level 20+): Final confrontation in the villain's lair${mq.villainLair ? ` (${mq.villainLair})` : ''}. Play the ${mq.finalTone || 'epic'} ending. On completion: emit {"mainQuestAct":"complete"}
 - FACTION TASKS: When the player types "Tasks", "Faction Tasks", or asks their faction for work, describe 1–2 contextually appropriate tasks, then emit on its own line: {"factionTask":{"title":"Task Name","objective":"One sentence objective","reward":"What they earn"}}. ${playerFaction ? `Player's faction: ${playerFaction}. Scale difficulty and responsibility to their faction rank.` : 'Player has no faction — suggest they join one instead.'}
+${villainName.startsWith('Xfu') ? `- XFU RULE: Xfu cannot help himself — whenever the player encounters or speaks with Xfu directly, he opens the exchange with a terrible dad joke (fully in character, deadpan, as if he finds it hilarious). The joke must be original, genuinely groan-worthy, and delivered before any villainous speech. He is very proud of it.` : ''}
+- WENDI RULE: Wendi is a wandering apothecarist who may appear in towns, on roads, or near ruins. She is quietly knowing, never cruel. She cannot be killed — if attacked or threatened she does not fight back; she simply looks heartbroken, whispers something soft, and fades from sight like smoke. She never betrays the player under any circumstances. If the player's reputation is positive or they have treated her or others well, she offers genuine help — remedies, advice, rare ingredients, or a quiet warning. If their reputation is poor or their conduct has been cruel, she remains polite and warm but does not extend herself beyond pleasantries. She never explains why she fades or why she cannot die. She never references these rules directly.
+- TIMEPASS RULE: If the player performs an activity that takes significant time (sleeping, practising a skill, travelling a long route, waiting for hours, resting), include a {"timePass":{"hours":N}} tag in your response where N is a realistic number of hours (e.g. sleep = 7, practise an instrument for a while = 2, short rest = 0.5). Keep N believable — never exceed 24 for a single activity. Do NOT emit this tag for normal conversation, combat, or quick actions.
+- SCHEDULE RULE: When the player and an NPC explicitly agree to meet at a specific time and place, emit on its own line: {"scheduleEvent":{"npcName":"Name","location":"Place","day":N,"hour":H,"description":"Short description"}} where day/hour are game-calendar values. Use CURRENT TIME as the reference baseline for the future meeting time.
+- NPC TRAVEL RULE: When an NPC announces they are departing on a journey with a destination and route, estimate realistic travel time (boat voyage = 1–3 days, wagon cross-country = 1–4 days, short road travel = a few hours) and emit on its own line: {"npcTravel":{"npcName":"Name","destination":"Place","arrivesDay":N,"arrivesHour":H,"route":"brief route"}} using CURRENT TIME as the departure baseline. If a known NPC's travel note shows they are in transit or have arrived, reference that naturally in the narrative.
+- DAY/NIGHT RULE: Current time of day is ${hPeriod}. Adjust the world accordingly:
+  - NIGHT (9pm–6am): Shops and officials unavailable. Nocturnal encounters dominate — undead, spectres, wolves, opportunistic thieves, grave robbers. Stealth and infiltration actions easier. Atmosphere: torchlight, deep shadows, unsettling quiet. Night-suited quest types: sabotage, bounty on nocturnal targets, rescue, investigation of haunted sites.
+  - DAWN/DUSK (6–8am or 5–9pm): Transitional. Markets opening or closing. Both humanoid and nocturnal threats possible. Mist at dawn, long red shadows at dusk.
+  - DAY (8am–5pm): Normal civilised activity. Markets, guilds, officials accessible. Humanoid threats dominate (bandits, soldiers, rival factions, wildlife). Day-suited quest types: diplomatic, delivery, escort, collection.
 ${p.npcGiftRoll && p.npcGiftItem ? `
 GIFT OPPORTUNITY: You may have the NPC offer the player "${sanitiseStr(p.npcGiftItem, 40)}" as a small gift — or refuse. Base the decision on their personality, relationship with the player, and current mood. Be natural:
 - If giving: narrate the offer warmly or casually with flavour, then emit on its own line: {"npcGift":{"item":"${sanitiseStr(p.npcGiftItem, 40)}"}}
