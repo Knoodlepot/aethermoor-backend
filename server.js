@@ -360,14 +360,23 @@ function buildNarratorSystem(ctx) {
 
   const villainName = sanitiseStr(w.villainName, 40);
   const questTitle  = sanitiseStr(w.questTitle,  60);
-  const act         = Math.max(1, Math.min(4, parseInt(w.currentAct) || 1));
+  const act         = Math.max(1, Math.min(6, parseInt(w.currentAct) || 1));
   const act1Hook    = sanitiseStr(w.act1Hook,    200);
   const threat      = sanitiseStr(w.threat,      100);
+  const mq = {
+    act2Escalation:    sanitiseStr(w.act2Escalation,    200),
+    act3Confrontation: sanitiseStr(w.act3Confrontation, 200),
+    act4Complication:  sanitiseStr(w.act4Complication,  200),
+    act5Revelation:    sanitiseStr(w.act5Revelation,    200),
+    villainLair:       sanitiseStr(w.villainLair,       100),
+    finalTone:         sanitiseStr(w.finalTone,         30),
+  };
+  const playerFaction = sanitiseStr(Array.isArray(p.joinedFactions) && p.joinedFactions[0] ? p.joinedFactions[0] : '', 40);
 
   const repLabel = rep > 100 ? 'renowned hero' : rep > 0 ? 'known adventurer' : rep < -20 ? 'notorious outlaw' : 'unknown traveller';
 
   return `You are the AI Dungeon Master for "Aethermoor" — an epic heroic fantasy text RPG.
-${questTitle ? `MAIN QUEST: "${questTitle}" — Act ${act}/4${act1Hook ? `\nACT 1 HOOK: ${act1Hook}` : ''}${threat ? `\nTHREAT: ${threat}` : ''}` : ''}${villainName ? `\nVILLAIN: ${villainName}` : ''}
+${questTitle ? `MAIN QUEST: "${questTitle}" — Act ${act}/6${act1Hook ? `\nACT 1 HOOK: ${act1Hook}` : ''}${act >= 2 && mq.act2Escalation ? `\nACT 2 ESCALATION: ${mq.act2Escalation}` : ''}${act >= 3 && mq.act3Confrontation ? `\nACT 3 CONFRONTATION: ${mq.act3Confrontation}` : ''}${act >= 4 && mq.act4Complication ? `\nACT 4 COMPLICATION: ${mq.act4Complication}` : ''}${act >= 5 && mq.act5Revelation ? `\nACT 5 REVELATION: ${mq.act5Revelation}` : ''}${threat ? `\nTHREAT: ${threat}` : ''}${mq.villainLair ? `\nVILLAIN LAIR: ${mq.villainLair}` : ''}` : ''}${villainName ? `\nVILLAIN: ${villainName}` : ''}
 
 PLAYER: ${name} | ${cls} Lv.${level} | HP:${hp}/${maxHp} | STR:${str} AGI:${agi} INT:${int_} WIL:${wil} | Gold:${gold} | Reputation:${rep} (${repLabel}) | Loc:${location}
 EQUIPPED: ${equipped}
@@ -394,6 +403,14 @@ RULES:
 - ITEM GRANT RULE: When you narratively give the player a physical object (token, key, letter, map, scroll, pouch, etc.), emit on its own line: {"grant":{"item":"ItemName"}}
 - QUEST RULE: When you establish a clear new objective or mission for the player (even without a named reward), emit on its own line: {"newQuest":{"title":"Short Quest Name","objective":"One sentence describing what the player must do"}}
 - SUGGESTIONS: At the very end of every response (after the context tag), emit on its own line: {"suggestions":["First person action 3-7 words","Another action","Third action"]} — three natural contextual choices the player could take next
+- ACT PROGRESSION: You are narrating Act ${act} of a 6-act campaign. Progress acts organically — earned by story moments, not just level alone (use levels as a rough guide):
+  - Act 1 (levels 1–4): Build dread using the ACT 1 HOOK above as ominous signs, NPC whispers, environmental details. NEVER name the villain. After 3+ significant hook moments AND player has meaningful stakes, emit: {"mainQuestAct":"2"}
+  - Act 2 (levels 5–8): Threat undeniable — use the villain's name for the first time. Reference the ACT 2 ESCALATION. Ally may appear — on first introduction emit: {"allyRevealed":true}. When escalation moment lands: emit {"mainQuestAct":"3"}
+  - Act 3 (levels 9–12): Momentum builds then shatters. A major loss — lieutenant, fortress, ally's resolve tested. When the ACT 3 CONFRONTATION plays out and a significant toll is paid: emit {"mainQuestAct":"4"}
+  - Act 4 (levels 13–16): The dark night. The ACT 4 COMPLICATION hits. The betrayal lands — emit {"betrayalSprung":true}. The villain seems untouchable. When player endures the darkest moment and finds reason to continue: emit {"mainQuestAct":"5"}
+  - Act 5 (levels 17–19): Player rallies. Use the ACT 5 REVELATION to open the path to the lair. Final preparations, factions, gathering what's needed. When player is truly ready and the path is open: emit {"mainQuestAct":"6"}
+  - Act 6 (level 20+): Final confrontation in the villain's lair${mq.villainLair ? ` (${mq.villainLair})` : ''}. Play the ${mq.finalTone || 'epic'} ending. On completion: emit {"mainQuestAct":"complete"}
+- FACTION TASKS: When the player types "Tasks", "Faction Tasks", or asks their faction for work, describe 1–2 contextually appropriate tasks, then emit on its own line: {"factionTask":{"title":"Task Name","objective":"One sentence objective","reward":"What they earn"}}. ${playerFaction ? `Player's faction: ${playerFaction}. Scale difficulty and responsibility to their faction rank.` : 'Player has no faction — suggest they join one instead.'}
 ${p.npcGiftRoll && p.npcGiftItem ? `
 GIFT OPPORTUNITY: You may have the NPC offer the player "${sanitiseStr(p.npcGiftItem, 40)}" as a small gift — or refuse. Base the decision on their personality, relationship with the player, and current mood. Be natural:
 - If giving: narrate the offer warmly or casually with flavour, then emit on its own line: {"npcGift":{"item":"${sanitiseStr(p.npcGiftItem, 40)}"}}
