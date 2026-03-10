@@ -25,6 +25,14 @@ const EMAIL_USER            = process.env.EMAIL_USER;
 const EMAIL_PASS            = process.env.EMAIL_PASS;
 const EMAIL_FROM            = process.env.EMAIL_FROM || 'noreply@aethermoor.com';
 
+// ── Model routing ──────────────────────────────────────────────
+const HAIKU_MODEL  = 'claude-haiku-4-5-20251001';
+const SONNET_MODEL = 'claude-sonnet-4-6';
+// Narrator turns: HAIKU_PCT% use Haiku, remainder use Sonnet.
+// Utility calls (screener, quest parser, enemy namer) always use Haiku.
+// Set HAIKU_PCT in Railway Variables to tune the split (default: 70).
+const HAIKU_PCT = Math.min(100, Math.max(0, parseInt(process.env.HAIKU_PCT || '70')));
+
 if (!ANTHROPIC_KEY)            { console.error('ANTHROPIC_API_KEY not set'); process.exit(1); }
 if (!process.env.DATABASE_URL) { console.error('DATABASE_URL not set');      process.exit(1); }
 if (!JWT_SECRET)               { console.error('JWT_SECRET not set');         process.exit(1); }
@@ -44,6 +52,8 @@ async function initDb() {
       player_id        TEXT NOT NULL UNIQUE,
       reset_token      TEXT,
       reset_expires    TIMESTAMPTZ,
+      verified         BOOLEAN DEFAULT TRUE,
+      verify_token     TEXT,
       created_at       TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE TABLE IF NOT EXISTS players (
@@ -219,6 +229,24 @@ async function sendResetEmail(email, resetUrl) {
   } catch (err) { console.error('Failed to send reset email:', err.message); }
 }
 
+// ── Email verification helper ──────────────────────────────────
+async function sendVerifyEmail(email, verifyUrl) {
+  if (!EMAIL_HOST) {
+    console.log(`[EMAIL VERIFY] ${email} → ${verifyUrl}`);
+    return;
+  }
+  try {
+    const nodemailer  = require('nodemailer');
+    const transporter = nodemailer.createTransport({ host: EMAIL_HOST, port: EMAIL_PORT, auth: { user: EMAIL_USER, pass: EMAIL_PASS } });
+    await transporter.sendMail({
+      from: EMAIL_FROM, to: email,
+      subject: 'Aethermoor — Verify your email',
+      text:  `Welcome to Aethermoor!\n\nVerify your email to begin your adventure:\n\n${verifyUrl}`,
+      html:  `<p style="font-family:sans-serif">Welcome to Aethermoor!</p><p><a href="${verifyUrl}">Click here to verify your email and begin your adventure.</a></p>`,
+    });
+  } catch (err) { console.error('Failed to send verify email:', err.message); }
+}
+
 // ── OAuth helper — find-or-create account by email ────────────
 async function oauthFindOrCreate(email) {
   const emailNorm = email.toLowerCase().trim();
@@ -232,7 +260,7 @@ async function oauthFindOrCreate(email) {
   const playerId     = 'player_' + crypto.randomBytes(12).toString('hex');
   const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
   await db.query(
-    'INSERT INTO accounts (id, email, password_hash, player_id) VALUES ($1, $2, $3, $4)',
+    'INSERT INTO accounts (id, email, password_hash, player_id, verified) VALUES ($1, $2, $3, $4, TRUE)',
     [accountId, emailNorm, passwordHash, playerId]
   );
   await ensurePlayerRow(playerId);
@@ -363,13 +391,13 @@ async function registerAccount(req, res) {
     const passwordHash = await bcrypt.hash(password, 12);
     const accountId    = uuidv4();
     const playerId     = 'player_' + crypto.randomBytes(12).toString('hex');
-    await db.query('INSERT INTO accounts (id, email, password_hash, player_id) VALUES ($1, $2, $3, $4)',
-      [accountId, emailNorm, passwordHash, playerId]);
-    await ensurePlayerRow(playerId);
-
-    const token = issueJwt(accountId, playerId, emailNorm);
-    console.log(`[REGISTER] ${emailNorm} → ${playerId}`);
-    return res.status(201).json({ token, playerId, email: emailNorm });
+    const verifyToken  = crypto.randomBytes(32).toString('hex');
+    await db.query(
+      'INSERT INTO accounts (id, email, password_hash, player_id, verified, verify_token) VALUES ($1, $2, $3, $4, FALSE, $5)',
+      [accountId, emailNorm, passwordHash, playerId, verifyToken]);
+    await sendVerifyEmail(emailNorm, `${GAME_URL}?verify=${verifyToken}`);
+    console.log(`[REGISTER] ${emailNorm} → ${playerId} (pending verification)`);
+    return res.status(201).json({ requiresVerification: true, email: emailNorm });
   } catch (err) {
     console.error('Register error:', err.message);
     return res.status(500).json({ error: 'db_error', message: 'Registration failed. Please try again.' });
@@ -575,6 +603,26 @@ app.post('/auth/oauth/discord', async (req, res) => {
   }
 });
 
+app.get('/auth/verify-email', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ error: 'missing_token', message: 'Verification token required' });
+  try {
+    const r = await db.query(
+      'SELECT id, email, player_id FROM accounts WHERE verify_token = $1 AND verified = FALSE', [token]);
+    if (r.rows.length === 0)
+      return res.status(400).json({ error: 'invalid_token', message: 'Verification link is invalid or has already been used.' });
+    const account = r.rows[0];
+    await db.query('UPDATE accounts SET verified = TRUE, verify_token = NULL WHERE id = $1', [account.id]);
+    await ensurePlayerRow(account.player_id); // creates player row and grants 100-token welcome bonus
+    const jwtToken = issueJwt(account.id, account.player_id, account.email);
+    console.log(`[VERIFY-EMAIL] ${account.email}`);
+    return res.json({ token: jwtToken, playerId: account.player_id, email: account.email });
+  } catch (err) {
+    console.error('Verify email error:', err.message);
+    return res.status(500).json({ error: 'db_error', message: 'Verification failed. Please try again.' });
+  }
+});
+
 // ── Token routes (auth required) ──────────────────────────────
 app.get('/tokens/balance', authenticateToken, async (req, res) => {
   try {
@@ -640,8 +688,10 @@ app.post('/api/claude', authenticateToken, async (req, res) => {
   else    system = SERVER_SYSTEM_PROMPTS.NARRATOR_MINI;
 
   try {
+    const utilityCall = ['SCREENER', 'QUEST_PARSER', 'ENEMY_NAMER'].includes(systemType);
+    const model = (utilityCall || Math.random() * 100 < HAIKU_PCT) ? HAIKU_MODEL : SONNET_MODEL;
     const { status, data } = await callAnthropic({
-      model:      'claude-haiku-4-5-20251001',
+      model,
       max_tokens: Math.min(Math.max(100, parseInt(max_tokens) || 900), 1200),
       system,
       messages,
