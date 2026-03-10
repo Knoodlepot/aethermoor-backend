@@ -78,6 +78,29 @@ async function initDb() {
       status            TEXT DEFAULT 'pending',
       created_at        TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS dungeon_progress (
+      player_id        TEXT PRIMARY KEY,
+      current_floor    INTEGER NOT NULL DEFAULT 0,
+      deepest_floor    INTEGER NOT NULL DEFAULT 0,
+      last_descent_at  TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS leaderboard_entries (
+      player_id     TEXT PRIMARY KEY,
+      hero_name     TEXT NOT NULL,
+      hero_class    TEXT NOT NULL,
+      hero_level    INTEGER NOT NULL DEFAULT 1,
+      deepest_floor INTEGER NOT NULL DEFAULT 0,
+      ng_plus       INTEGER NOT NULL DEFAULT 0,
+      updated_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS dungeon_descents (
+      id          SERIAL PRIMARY KEY,
+      player_id   TEXT NOT NULL,
+      floor       INTEGER NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verified     BOOLEAN DEFAULT TRUE;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verify_token TEXT;
   `);
   console.log('DB ready');
 }
@@ -245,6 +268,19 @@ async function sendVerifyEmail(email, verifyUrl) {
       html:  `<p style="font-family:sans-serif">Welcome to Aethermoor!</p><p><a href="${verifyUrl}">Click here to verify your email and begin your adventure.</a></p>`,
     });
   } catch (err) { console.error('Failed to send verify email:', err.message); }
+}
+
+// ── Discord webhook helper ─────────────────────────────────────
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+async function sendDiscordWebhook(content) {
+  if (!DISCORD_WEBHOOK_URL) return;
+  try {
+    await fetch(DISCORD_WEBHOOK_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ content }),
+    });
+  } catch (err) { console.error('[Discord] Webhook failed:', err.message); }
 }
 
 // ── OAuth helper — find-or-create account by email ────────────
@@ -760,6 +796,159 @@ app.get('/admin/stats', async (req, res) => {
       revenue_pounds:      ((parseInt(purchases.rows[0].pence) || 0) / 100).toFixed(2),
     });
   } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Dungeon leaderboard routes ────────────────────────────────
+const DUNGEON_MIN_INTERVAL_MS = 15_000;
+
+app.post('/dungeon/descend', authenticateToken, async (req, res) => {
+  const playerId  = req.account.playerId;
+  const heroName  = sanitiseStr(req.body.heroName,  30) || 'Adventurer';
+  const heroClass = sanitiseStr(req.body.heroClass, 20) || 'Warrior';
+  const heroLevel = Math.max(1,  Math.min(99, parseInt(req.body.heroLevel) || 1));
+  const ngPlus    = Math.max(0,  Math.min(20, parseInt(req.body.ngPlus)    || 0));
+
+  try {
+    const progRes = await db.query(
+      'SELECT current_floor, deepest_floor, last_descent_at FROM dungeon_progress WHERE player_id = $1',
+      [playerId]
+    );
+    const now     = Date.now();
+    const hasRow  = progRes.rows.length > 0;
+    const current = hasRow ? progRes.rows[0].current_floor  : 0;
+    const deepest = hasRow ? progRes.rows[0].deepest_floor  : 0;
+    const lastAt  = hasRow ? progRes.rows[0].last_descent_at : null;
+
+    if (lastAt && (now - new Date(lastAt).getTime()) < DUNGEON_MIN_INTERVAL_MS) {
+      const wait = Math.ceil((DUNGEON_MIN_INTERVAL_MS - (now - new Date(lastAt).getTime())) / 1000);
+      return res.status(429).json({ ok: false, error: 'rate_limited',
+        message: `The dungeon resists you — wait ${wait}s before descending again.` });
+    }
+
+    const nextFloor       = current + 1;
+    const newDeepest      = Math.max(deepest, nextFloor);
+
+    await db.query(
+      `INSERT INTO dungeon_progress (player_id, current_floor, deepest_floor, last_descent_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (player_id) DO UPDATE
+           SET current_floor = $2, deepest_floor = $3, last_descent_at = NOW()`,
+      [playerId, nextFloor, newDeepest]
+    );
+    await db.query('INSERT INTO dungeon_descents (player_id, floor) VALUES ($1, $2)', [playerId, nextFloor]);
+
+    if (nextFloor > deepest) {
+      await db.query(
+        `INSERT INTO leaderboard_entries
+            (player_id, hero_name, hero_class, hero_level, deepest_floor, ng_plus, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT (player_id) DO UPDATE
+             SET hero_name = $2, hero_class = $3, hero_level = $4,
+                 deepest_floor = $5, ng_plus = $6, updated_at = NOW()
+             WHERE leaderboard_entries.deepest_floor < $5`,
+        [playerId, heroName, heroClass, heroLevel, nextFloor, ngPlus]
+      );
+      const rankRes = await db.query(
+        'SELECT COUNT(*) AS rank FROM leaderboard_entries WHERE deepest_floor > $1', [nextFloor]
+      );
+      const rank = parseInt(rankRes.rows[0].rank, 10);
+      if (rank < 10) {
+        await sendDiscordWebhook(
+          `:hole: **${heroName}** the ${heroClass} (Lv.${heroLevel}${ngPlus > 0 ? `, NG+${ngPlus}` : ''})` +
+          ` just reached **Floor ${nextFloor}**, placing them **#${rank + 1}** on the Hall of Depths!`
+        );
+      }
+    }
+
+    console.log(`[DUNGEON] ${playerId} → Floor ${nextFloor} (deepest: ${newDeepest})`);
+    return res.json({ ok: true, floor: nextFloor, deepestFloor: newDeepest });
+  } catch (err) {
+    console.error('Dungeon descend error:', err.message);
+    return res.status(500).json({ ok: false, error: 'db_error', message: 'Could not record descent — please try again.' });
+  }
+});
+
+app.post('/dungeon/sync', authenticateToken, async (req, res) => {
+  const playerId     = req.account.playerId;
+  const claimedFloor = Math.max(0, Math.min(999, parseInt(req.body.claimedFloor) || 0));
+  if (claimedFloor === 0) return res.json({ ok: true, skipped: true });
+  try {
+    const existing = await db.query('SELECT current_floor FROM dungeon_progress WHERE player_id = $1', [playerId]);
+    if (existing.rows.length > 0) return res.json({ ok: true, skipped: true, serverFloor: existing.rows[0].current_floor });
+    await db.query(
+      `INSERT INTO dungeon_progress (player_id, current_floor, deepest_floor)
+         VALUES ($1, $2, $2) ON CONFLICT DO NOTHING`,
+      [playerId, claimedFloor]
+    );
+    console.log(`[DUNGEON-SYNC] ${playerId} synced to floor ${claimedFloor}`);
+    return res.json({ ok: true, floor: claimedFloor });
+  } catch (err) {
+    console.error('Dungeon sync error:', err.message);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+app.post('/dungeon/reset', authenticateToken, async (req, res) => {
+  try {
+    await db.query('UPDATE dungeon_progress SET current_floor = 0 WHERE player_id = $1', [req.account.playerId]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('Dungeon reset error:', err.message);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+app.get('/dungeon/leaderboard', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT hero_name, hero_class, hero_level, deepest_floor, ng_plus
+         FROM leaderboard_entries
+         ORDER BY deepest_floor DESC, updated_at ASC
+         LIMIT 50`
+    );
+    return res.json({ entries: r.rows });
+  } catch (err) {
+    console.error('Leaderboard fetch error:', err.message);
+    return res.status(500).json({ entries: [], error: 'db_error' });
+  }
+});
+
+app.post('/admin/dungeon/monthly-draw', async (req, res) => {
+  if (!adminAuth(req, res)) return;
+  const tokensAwarded = parseInt(req.body.tokensAwarded) || 500;
+  const note          = req.body.note || null;
+  if (!Number.isInteger(tokensAwarded) || tokensAwarded <= 0 || tokensAwarded > 100_000)
+    return res.status(400).json({ error: 'tokensAwarded must be a positive integer ≤ 100,000' });
+  try {
+    const eligibleRes = await db.query(
+      `SELECT DISTINCT player_id FROM dungeon_descents
+         WHERE created_at >= date_trunc('month', NOW())`
+    );
+    const eligible = eligibleRes.rows.map(r => r.player_id);
+    if (eligible.length === 0)
+      return res.json({ ok: false, message: 'No eligible players this month.' });
+
+    const winner = eligible[crypto.randomInt(eligible.length)];
+    await addTokens(winner, tokensAwarded, note ? `monthly_prize: ${note}` : 'monthly_prize');
+
+    const lbRes = await db.query(
+      'SELECT hero_name, hero_class, hero_level FROM leaderboard_entries WHERE player_id = $1', [winner]
+    );
+    const heroName  = lbRes.rows[0]?.hero_name  || 'Unknown Hero';
+    const heroClass = lbRes.rows[0]?.hero_class  || 'Adventurer';
+    const heroLevel = lbRes.rows[0]?.hero_level  || '?';
+
+    await sendDiscordWebhook(
+      `:trophy: **Monthly Prize Draw!** ${eligible.length} eligible adventurer${eligible.length !== 1 ? 's' : ''} this month.\n` +
+      `The winner is **${heroName}** the ${heroClass} (Lv.${heroLevel}) — awarded **${tokensAwarded} tokens**! Congratulations!`
+    );
+
+    console.log(`[MONTHLY_DRAW] Winner: ${winner} → ${tokensAwarded} tokens. Pool: ${eligible.length}`);
+    return res.json({ ok: true, winner, heroName, tokensAwarded, eligibleCount: eligible.length });
+  } catch (err) {
+    console.error('Monthly draw error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Start ──────────────────────────────────────────────────────
