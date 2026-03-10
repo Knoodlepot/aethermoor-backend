@@ -765,6 +765,21 @@ app.get('/admin/player', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+app.post('/admin/verify-player', async (req, res) => {
+  if (!adminAuth(req, res)) return;
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'email required' });
+  try {
+    const r = await db.query('SELECT id, email, player_id FROM accounts WHERE email = $1', [email.toLowerCase().trim()]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Account not found' });
+    const account = r.rows[0];
+    await db.query('UPDATE accounts SET verified = TRUE, verify_token = NULL WHERE id = $1', [account.id]);
+    await ensurePlayerRow(account.player_id);
+    console.log(`[ADMIN-VERIFY] ${account.email} → ${account.player_id}`);
+    return res.json({ success: true, email: account.email, playerId: account.player_id });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.post('/admin/add-tokens', async (req, res) => {
   if (!adminAuth(req, res)) return;
   const { playerId, amount, note } = req.body;
