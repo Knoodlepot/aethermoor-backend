@@ -388,7 +388,12 @@ RULES:
 - Track consequences, remember NPCs, weave in main quest organically
 - When you introduce a NEW named NPC emit on its own line: {"npc":{"name":"Name","role":"Role","relationship":"neutral","notes":"One sentence"}}
 - When a quest is clearly completed say "quest complete" somewhere in your response
-- SHOP RULE: Never narrate a completed transaction — describe wares and suggest the player use the Barter command`;
+- SHOP RULE: Never narrate a completed transaction — describe wares and suggest the player use the Barter command
+${p.npcGiftRoll && p.npcGiftItem ? `
+GIFT OPPORTUNITY: You may have the NPC offer the player "${sanitiseStr(p.npcGiftItem, 40)}" as a small gift — or refuse. Base the decision on their personality, relationship with the player, and current mood. Be natural:
+- If giving: narrate the offer warmly or casually with flavour, then emit on its own line: {"npcGift":{"item":"${sanitiseStr(p.npcGiftItem, 40)}"}}
+- If refusing: narrate the refusal with character — dismissive, apologetic, grumpy, amused, whatever fits. No swearing unless the player has already used strong language in this conversation.
+Do not mention the item by name before deciding — reveal it naturally in the narration.` : ''}`;
 }
 
 // ── Anthropic proxy ────────────────────────────────────────────
