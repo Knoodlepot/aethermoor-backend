@@ -389,6 +389,11 @@ RULES:
 - When you introduce a NEW named NPC emit on its own line: {"npc":{"name":"Name","role":"Role","relationship":"neutral","notes":"One sentence"}}
 - When a quest is clearly completed say "quest complete" somewhere in your response
 - SHOP RULE: Never narrate a completed transaction — describe wares and suggest the player use the Barter command
+- GOLD RULE: Never narrate the player spending gold. If a purchase, hire, or transaction is appropriate, describe the option and let the player decide — they use the Barter command to confirm
+- TRAVEL RULE: Never move the player to a distant location automatically. End your response at the moment of decision — describe what lies ahead and let the player choose whether to go
+- ITEM GRANT RULE: When you narratively give the player a physical object (token, key, letter, map, scroll, pouch, etc.), emit on its own line: {"grant":{"item":"ItemName"}}
+- QUEST RULE: When you establish a clear new objective or mission for the player (even without a named reward), emit on its own line: {"newQuest":{"title":"Short Quest Name","objective":"One sentence describing what the player must do"}}
+- SUGGESTIONS: At the very end of every response (after the context tag), emit on its own line: {"suggestions":["First person action 3-7 words","Another action","Third action"]} — three natural contextual choices the player could take next
 ${p.npcGiftRoll && p.npcGiftItem ? `
 GIFT OPPORTUNITY: You may have the NPC offer the player "${sanitiseStr(p.npcGiftItem, 40)}" as a small gift — or refuse. Base the decision on their personality, relationship with the player, and current mood. Be natural:
 - If giving: narrate the offer warmly or casually with flavour, then emit on its own line: {"npcGift":{"item":"${sanitiseStr(p.npcGiftItem, 40)}"}}
