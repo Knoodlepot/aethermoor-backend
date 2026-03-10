@@ -431,7 +431,7 @@ async function registerAccount(req, res) {
     await db.query(
       'INSERT INTO accounts (id, email, password_hash, player_id, verified, verify_token) VALUES ($1, $2, $3, $4, FALSE, $5)',
       [accountId, emailNorm, passwordHash, playerId, verifyToken]);
-    await sendVerifyEmail(emailNorm, `${GAME_URL}?verify=${verifyToken}`);
+    sendVerifyEmail(emailNorm, `${GAME_URL}?verify=${verifyToken}`); // fire-and-forget
     console.log(`[REGISTER] ${emailNorm} → ${playerId} (pending verification)`);
     return res.status(201).json({ requiresVerification: true, email: emailNorm });
   } catch (err) {
