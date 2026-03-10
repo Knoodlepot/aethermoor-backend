@@ -30,8 +30,8 @@ const HAIKU_MODEL  = 'claude-haiku-4-5-20251001';
 const SONNET_MODEL = 'claude-sonnet-4-6';
 // Narrator turns: HAIKU_PCT% use Haiku, remainder use Sonnet.
 // Utility calls (screener, quest parser, enemy namer) always use Haiku.
-// Set HAIKU_PCT in Railway Variables to tune the split (default: 70).
-const HAIKU_PCT = Math.min(100, Math.max(0, parseInt(process.env.HAIKU_PCT || '70')));
+// Set HAIKU_PCT in Railway Variables to tune the split (default: 90).
+const HAIKU_PCT = Math.min(100, Math.max(0, parseInt(process.env.HAIKU_PCT || '90')));
 
 if (!ANTHROPIC_KEY)            { console.error('ANTHROPIC_API_KEY not set'); process.exit(1); }
 if (!process.env.DATABASE_URL) { console.error('DATABASE_URL not set');      process.exit(1); }
@@ -129,12 +129,12 @@ app.use(express.json());
 
 // ── Token packages ────────────────────────────────────────────
 const TOKEN_PACKAGES = {
-  starter:    { tokens: 100,   pence: 100,  label: '100 Tokens',   priceId: 'price_1T8kmJKvhVLecCSvf593COyi' },
-  adventurer: { tokens: 300,   pence: 250,  label: '300 Tokens',   priceId: 'price_1T8kmlKvhVLecCSvV6GQdjMh' },
-  hero:       { tokens: 750,   pence: 500,  label: '750 Tokens',   priceId: 'price_1T8kn5KvhVLecCSvmCtEMlx3' },
-  legend:     { tokens: 1500,  pence: 999,  label: '1500 Tokens',  priceId: 'price_1T8kntKvhVLecCSv8kd4Pkzu' },
-  champion:   { tokens: 3500,  pence: 1999, label: '3500 Tokens',  priceId: 'price_1T92wKKvhVLecCSvnhNCNVHc' },
-  immortal:   { tokens: 10000, pence: 4999, label: '10000 Tokens', priceId: 'price_1T92yTKvhVLecCSvRqpaI9j2' },
+  starter:    { tokens: 100,  pence: 100,  label: '100 Tokens',   priceId: 'price_1T8kmJKvhVLecCSvf593COyi' },
+  adventurer: { tokens: 290,  pence: 250,  label: '290 Tokens',   priceId: 'price_1T8kmlKvhVLecCSvV6GQdjMh' },
+  hero:       { tokens: 650,  pence: 500,  label: '650 Tokens',   priceId: 'price_1T8kn5KvhVLecCSvmCtEMlx3' },
+  legend:     { tokens: 1500, pence: 999,  label: '1,500 Tokens', priceId: 'price_1T8kntKvhVLecCSv8kd4Pkzu' },
+  champion:   { tokens: 3500, pence: 1999, label: '3,500 Tokens', priceId: 'price_1T92wKKvhVLecCSvnhNCNVHc' },
+  immortal:   { tokens: 8500, pence: 4999, label: '8,500 Tokens', priceId: 'price_1T92yTKvhVLecCSvRqpaI9j2' },
 };
 
 // ── Auth middleware ────────────────────────────────────────────
