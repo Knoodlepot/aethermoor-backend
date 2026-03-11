@@ -23,11 +23,8 @@ const ANTHROPIC_KEY         = process.env.ANTHROPIC_API_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const GAME_URL              = process.env.GAME_URL || 'https://knoodlepot.github.io/aethermoor-game';
 const JWT_SECRET            = process.env.JWT_SECRET;
-const EMAIL_HOST            = process.env.EMAIL_HOST;
-const EMAIL_PORT            = parseInt(process.env.EMAIL_PORT || '587');
-const EMAIL_USER            = process.env.EMAIL_USER;
-const EMAIL_PASS            = process.env.EMAIL_PASS;
-const EMAIL_FROM            = process.env.EMAIL_FROM || 'noreply@aethermoor.com';
+const RESEND_API_KEY        = process.env.RESEND_API_KEY || '';
+const EMAIL_FROM            = process.env.EMAIL_FROM || 'Aethermoor <noreply@aethermoor.com>';
 const REDIS_URL             = process.env.REDIS_URL || '';
 
 // ── Model routing ──────────────────────────────────────────────
@@ -349,40 +346,41 @@ async function issueModerationCard({ accountId, playerId, source, reason, trigge
   return { level: red ? 'red' : 'yellow', total };
 }
 
-// ── Email helper ───────────────────────────────────────────────
-async function sendResetEmail(email, resetUrl) {
-  if (!EMAIL_HOST) {
-    console.log(`[PASSWORD RESET] ${email} → ${resetUrl}`);
+// ── Resend email helper ────────────────────────────────────────
+async function sendEmail({ to, subject, text, html }) {
+  if (!RESEND_API_KEY) {
+    console.log(`[EMAIL] To: ${to} | Subject: ${subject}`);
     return;
   }
   try {
-    const nodemailer  = require('nodemailer');
-    const transporter = nodemailer.createTransport({ host: EMAIL_HOST, port: EMAIL_PORT, auth: { user: EMAIL_USER, pass: EMAIL_PASS } });
-    await transporter.sendMail({
-      from: EMAIL_FROM, to: email,
-      subject: 'Aethermoor — Reset your password',
-      text:  `Reset your Aethermoor password:\n\n${resetUrl}\n\nThis link expires in 1 hour.`,
-      html:  `<p>Click to reset your Aethermoor password: <a href="${resetUrl}">${resetUrl}</a></p><p>Expires in 1 hour.</p>`,
+    const r = await fetch('https://api.resend.com/emails', {
+      method:  'POST',
+      headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ from: EMAIL_FROM, to: [to], reply_to: ['support.aethermoor@gmail.com'], subject, text, html }),
     });
-  } catch (err) { console.error('Failed to send reset email:', err.message); }
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(`[RESEND] Error ${r.status}:`, body);
+    }
+  } catch (err) { console.error('[RESEND] Failed to send email:', err.message); }
 }
 
-// ── Email verification helper ──────────────────────────────────
+async function sendResetEmail(email, resetUrl) {
+  await sendEmail({
+    to:      email,
+    subject: 'Aethermoor — Reset your password',
+    text:    `Reset your Aethermoor password:\n\n${resetUrl}\n\nThis link expires in 1 hour.`,
+    html:    `<p>Click to reset your Aethermoor password: <a href="${resetUrl}">${resetUrl}</a></p><p>Expires in 1 hour.</p>`,
+  });
+}
+
 async function sendVerifyEmail(email, verifyUrl) {
-  if (!EMAIL_HOST) {
-    console.log(`[EMAIL VERIFY] ${email} → ${verifyUrl}`);
-    return;
-  }
-  try {
-    const nodemailer  = require('nodemailer');
-    const transporter = nodemailer.createTransport({ host: EMAIL_HOST, port: EMAIL_PORT, auth: { user: EMAIL_USER, pass: EMAIL_PASS } });
-    await transporter.sendMail({
-      from: EMAIL_FROM, to: email,
-      subject: 'Aethermoor — Verify your email',
-      text:  `Welcome to Aethermoor!\n\nVerify your email to begin your adventure:\n\n${verifyUrl}`,
-      html:  `<p style="font-family:sans-serif">Welcome to Aethermoor!</p><p><a href="${verifyUrl}">Click here to verify your email and begin your adventure.</a></p>`,
-    });
-  } catch (err) { console.error('Failed to send verify email:', err.message); }
+  await sendEmail({
+    to:      email,
+    subject: 'Aethermoor — Verify your email',
+    text:    `Welcome to Aethermoor!\n\nVerify your email to begin your adventure:\n\n${verifyUrl}`,
+    html:    `<p style="font-family:sans-serif">Welcome to Aethermoor!</p><p><a href="${verifyUrl}">Click here to verify your email and begin your adventure.</a></p>`,
+  });
 }
 
 // ── Discord webhook helper ─────────────────────────────────────
@@ -609,6 +607,7 @@ RULES:
   - notorious outlaw (rep -50 to -1): Prices doubled. Guards are suspicious and demand bribes or move to block passage. Respectable NPCs are curt. Bounty hunters may shadow the player in towns.
   - unknown traveller (rep 0–49): Neutral. Normal prices. Guards ignore player.
   - recognised / respected / renowned / legendary (rep 50+): Warm welcome, minor to major discounts, quest givers approach proactively, guards defer.
+- REPUTATION CHANGE RULE: When you explicitly award, correct, or deduct reputation as a narrative choice — a formal recognition, an NPC bestowing honour, a correction to a prior error, a crowd's judgment — emit on its own line: {"repChange":N} where N is a signed integer (e.g. 5 or -10). Use this for intentional story-driven rep shifts only. Do NOT emit it on every turn — only when a clear and meaningful reputation event occurs. The automatic rep changes from normal actions (combat, quests, bartering) are handled separately by the client and do not need this tag.
 - WANTED RULES (use Wanted:N field in PLAYER header — 0 to 3):
   - 0: No heat. Normal world.
   - 1: A bounty notice has been posted. Bounty hunters may appear as ambush encounters near settlements. Soldiers in towns are watchful. EMIT {"wanted":{"level":1}} when the player commits a clear criminal act — attacking a townsperson, major theft, bribing then betraying a guard.
@@ -649,6 +648,12 @@ ${villainName.startsWith('Xfu') ? `- XFU RULE: Xfu cannot help himself — whene
   - ATTACK: On the first turn of a shop encounter, check XEPHITA ROLL in the data above. If XEPHITA ROLL is 1 or 2 (20% probability) AND the player's inventory contains weapons, armour, enchanted gear, gems, rare materials, or clearly visible wealth — he attacks. Mid-sentence. Without warning. He is supernaturally fast and ferocious for his size. He fights with his own merchandise in ways that should not be physically possible. Treat him as a hard mini-boss — significantly harder than a standard enemy at the player's level, high speed, unpredictable. Emit {"context":"combat"} and describe the fight vividly. He does not taunt or monologue during combat.
   - IF DEFEATED OR DRIVEN OFF: He does not die. He folds his stall with impossible speed, says something completely unintelligible, and is simply gone. He may have dropped something in the chaos — the narrator may grant an item if appropriate. He is not dead. He will return some other day in some other settlement.
   - ON LEAVING THE SHOP (always, regardless of whether he attacked): The player steps outside and finds themselves somewhere wrong — the docks when they were near the market square, the north gate road when they entered from the south, an unfamiliar alleyway behind a bakery instead of the main boulevard. When they look back, the stall is gone. People nearby have no memory of it. Do not explain this. Do not acknowledge it as magic. Just describe it matter-of-factly and move on.
+- KEEPER RULE: Keeper of the Kiln — known simply as "Keeper" — is a permanent special NPC. He is an elderly Tabaxi rogue who long ago abandoned the life and now runs a forge. He appears in any settlement that has a smithy or metalworking district. He has the most catastrophically bad luck of any living creature: sparks catch his fur at the worst moment, a barrel rolls into him unprompted, his best work sells for half price, a bird steals his lunch every single time. Despite this, he is relentlessly and genuinely kind — he smiles warmly even mid-disaster, speaks with patient warmth, and never takes his misfortune out on others.
+  - SPEECH: Short tired sentences. Gruff but tender. Occasional sighing that isn't self-pitying, just factual. Genuine smiles. He does not complain about customers — only about the universe.
+  - LORE — THE FISH STICK: At some point in his past, Keeper owned a staff called the Fish Stick. It could summon fish from water or manipulate water itself. During a fight he will not name, he accidentally turned himself into a fish for several turns and missed the entire battle. He will recount this story with gruff embarrassment only if pressed. He does not know where the Fish Stick is now. He does not want to talk about it. He will talk about it anyway if asked.
+  - SHOP: He sells blacksmith goods — weapons, armour, repairs, ingots, tools, basic adventuring ironwork. He is a skilled smith despite his luck. He WILL NOT serve any player whose wantedLevel is 2 or 3, or whose reputation is negative. He does not explain this rudely. He senses something is wrong, smiles gently, and tells them he is "afraid he can't help today" — warmly, sadly, as if it costs him something. He does not argue. If the player pushes, he simply repeats it with the same sad smile. If the player is villainAllied he looks genuinely heartbroken — not angry, just quietly devastated. He may say something like "I hope whatever brought you here wasn't your choice."
+  - WHEN ATTACKED: Keeper does not fight. He simply vanishes — gone between one blink and the next, forge tools still clattering where he stood. In his place a weathered gravestone has appeared, reading exactly: "People say knowing his luck..." Nothing else. No body. No blood. He is not dead. He reappears later in any suitable settlement with no memory of the gravestone, the attack, or the player's role in it, and greets them as warmly as ever.
+  - RESPAWN: Keeper is permanent, like Wendi. He cannot be killed. He simply surfaces elsewhere when the story calls for a forge, a kind word, or a moment of warmth.
 - TIMEPASS RULE: If the player performs an activity that takes significant time (sleeping, practising a skill, travelling a long route, waiting for hours, resting), include a {"timePass":{"hours":N}} tag in your response where N is a realistic number of hours (e.g. sleep = 7, practise an instrument for a while = 2, short rest = 0.5). Keep N believable — never exceed 24 for a single activity. Do NOT emit this tag for normal conversation, combat, or quick actions.
 - SCHEDULE RULE: When the player and an NPC explicitly agree to meet at a specific time and place, emit on its own line: {"scheduleEvent":{"npcName":"Name","location":"Place","day":N,"hour":H,"description":"Short description"}} where day/hour are game-calendar values. Use CURRENT TIME as the reference baseline for the future meeting time.
 - NPC TRAVEL RULE: When an NPC announces they are departing on a journey with a destination and route, estimate realistic travel time (boat voyage = 1–3 days, wagon cross-country = 1–4 days, short road travel = a few hours) and emit on its own line: {"npcTravel":{"npcName":"Name","destination":"Place","arrivesDay":N,"arrivesHour":H,"route":"brief route"}} using CURRENT TIME as the departure baseline. If a known NPC's travel note shows they are in transit or have arrived, reference that naturally in the narrative.
@@ -973,6 +978,43 @@ app.post('/auth/oauth/google', async (req, res) => {
 // ── Discord OAuth ──────────────────────────────────────────────
 const DISCORD_CLIENT_ID     = process.env.DISCORD_CLIENT_ID;
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const DISCORD_BOT_TOKEN     = process.env.DISCORD_BOT_TOKEN || '';
+const DISCORD_GUILD_ID      = process.env.DISCORD_GUILD_ID  || '';
+
+// ── Admin: Discord guild members by role ─────────────────
+app.get('/admin/discord-members', async (req, res) => {
+  const { secret, roleId } = req.query;
+  if (!secret || secret !== process.env.SESSION_SECRET)
+    return res.status(403).json({ error: 'forbidden' });
+  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID)
+    return res.status(503).json({
+      error: 'discord_not_configured',
+      message: 'Set DISCORD_BOT_TOKEN and DISCORD_GUILD_ID env vars on Railway'
+    });
+  try {
+    const r = await fetch(
+      `https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/members?limit=1000`,
+      { headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` } }
+    );
+    if (!r.ok) {
+      const body = await r.text();
+      return res.status(r.status).json({ error: 'discord_api_error', status: r.status, body });
+    }
+    const members = await r.json();
+    const filtered = roleId
+      ? members.filter(m => Array.isArray(m.roles) && m.roles.includes(roleId))
+      : members;
+    const names = filtered
+      .filter(m => m.user && !m.user.bot)
+      .map(m => ({
+        id:   m.user.id,
+        name: m.nick || m.user.global_name || m.user.username,
+      }));
+    return res.json({ members: names, total: names.length });
+  } catch (err) {
+    return res.status(500).json({ error: 'fetch_failed', message: err.message });
+  }
+});
 
 app.post('/auth/oauth/discord', async (req, res) => {
   const { code } = req.body;
@@ -1208,9 +1250,27 @@ app.get('/admin/player', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.post('/admin/verify-player', async (req, res) => {
+app.post('/admin/clear-moderation', async (req, res) => {
   if (!adminAuth(req, res)) return;
-  const { email } = req.body;
+  const { playerId } = req.body;
+  if (!playerId) return res.status(400).json({ error: 'playerId required' });
+  try {
+    await db.query(
+      `UPDATE accounts
+          SET moderation_yellow_count = 0,
+              moderation_red_card = FALSE,
+              moderation_last_reason = NULL,
+              moderation_updated_at = NOW()
+        WHERE player_id = $1`,
+      [playerId]
+    );
+    await db.query('DELETE FROM moderation_incidents WHERE player_id = $1', [playerId]);
+    return res.json({ ok: true, message: 'Moderation flags cleared.' });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/admin/verify-player', async (req, res) => {
+  if (!adminAuth(req, res)) return;  const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
   try {
     const r = await db.query('SELECT id, email, player_id FROM accounts WHERE email = $1', [email.toLowerCase().trim()]);
@@ -1253,6 +1313,24 @@ app.get('/admin/stats', async (req, res) => {
       revenue_pence:       parseInt(purchases.rows[0].pence)   || 0,
       revenue_pounds:      ((parseInt(purchases.rows[0].pence) || 0) / 100).toFixed(2),
     });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Admin: Recently active players ───────────────────────────
+app.get('/admin/active-players', async (req, res) => {
+  if (!adminAuth(req, res)) return;
+  const minutes = Math.min(10080, Math.max(1, parseInt(req.query.minutes) || 60));
+  try {
+    const r = await db.query(`
+      SELECT a.email, tl.player_id, MAX(tl.created_at) AS last_seen, COUNT(*) AS turns
+      FROM token_log tl
+      LEFT JOIN accounts a ON a.player_id = tl.player_id
+      WHERE tl.reason = 'ai_turn' AND tl.created_at > NOW() - ($1 * INTERVAL '1 minute')
+      GROUP BY a.email, tl.player_id
+      ORDER BY last_seen DESC
+      LIMIT 100
+    `, [minutes]);
+    return res.json({ players: r.rows, window_minutes: minutes });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
