@@ -453,6 +453,8 @@ function buildNarratorSystem(ctx) {
   const gold     = Math.max(0,              parseInt(p.gold)    || 0);
   const location = sanitiseStr(p.location,  60) || 'Aethermoor Capital';
   const rep      = Math.max(-999, Math.min(9999, parseInt(p.reputation) || 0));
+  const wantedLevel   = Math.max(0, Math.min(3, parseInt(p.wantedLevel) || 0));
+  const villainAllied = w.villainAllied === true;
   const gameHour = Math.max(0, Math.min(23.99, parseFloat(p.gameHour) || 8));
   const gameDay  = Math.max(1, parseInt(p.gameDay) || 1);
   const h12raw   = gameHour === 0 ? 12 : gameHour > 12 ? gameHour - 12 : Math.floor(gameHour);
@@ -539,6 +541,20 @@ function buildNarratorSystem(ctx) {
     travelMatrixStr = `TRAVEL MATRIX (foot baseline; horse=2.5×, wagon=1.5× roads, barge=3× rivers, boat=4× coast):\n${routeLines}${geoLines ? '\nGEOGRAPHY:\n'+geoLines : ''}`;
   }
 
+  const worldEventsObj = (typeof w.worldEvents === 'object' && w.worldEvents !== null) ? w.worldEvents : {};
+  const _wEvLines = [];
+  Object.entries(worldEventsObj).forEach(([loc, evs]) => {
+    if (!Array.isArray(evs)) return;
+    evs.forEach(ev => {
+      if (ev.endsDay === null || ev.endsDay === undefined || ev.endsDay >= gameDay) {
+        _wEvLines.push(
+          `${sanitiseStr(loc, 40)}: ${sanitiseStr(ev.type || '', 15)} [${sanitiseStr(ev.severity || '', 10)}]${ev.endsDay ? ` until Day ${ev.endsDay}` : ''} — ${sanitiseStr(ev.desc || '', 80)}`
+        );
+      }
+    });
+  });
+  const worldEventsStr = _wEvLines.length > 0 ? _wEvLines.join('; ') : '';
+
   const villainName = sanitiseStr(w.villainName, 40);
   const questTitle  = sanitiseStr(w.questTitle,  60);
   const act         = Math.max(1, Math.min(6, parseInt(w.currentAct) || 1));
@@ -554,12 +570,18 @@ function buildNarratorSystem(ctx) {
   };
   const playerFaction = sanitiseStr(Array.isArray(p.joinedFactions) && p.joinedFactions[0] ? p.joinedFactions[0] : '', 40);
 
-  const repLabel = rep > 100 ? 'renowned hero' : rep > 0 ? 'known adventurer' : rep < -20 ? 'notorious outlaw' : 'unknown traveller';
+  const repLabel = rep >= 500 ? 'living legend'
+               : rep >= 300 ? 'renowned hero'
+               : rep >= 150 ? 'respected adventurer'
+               : rep >= 50  ? 'recognised name'
+               : rep >= 0   ? 'unknown traveller'
+               : rep >= -50 ? 'notorious outlaw'
+               :               'outcast';
 
   return `You are the AI Dungeon Master for "Aethermoor" — an epic heroic fantasy text RPG.
-${questTitle ? `MAIN QUEST: "${questTitle}" — Act ${act}/6${act1Hook ? `\nACT 1 HOOK: ${act1Hook}` : ''}${act >= 2 && mq.act2Escalation ? `\nACT 2 ESCALATION: ${mq.act2Escalation}` : ''}${act >= 3 && mq.act3Confrontation ? `\nACT 3 CONFRONTATION: ${mq.act3Confrontation}` : ''}${act >= 4 && mq.act4Complication ? `\nACT 4 COMPLICATION: ${mq.act4Complication}` : ''}${act >= 5 && mq.act5Revelation ? `\nACT 5 REVELATION: ${mq.act5Revelation}` : ''}${threat ? `\nTHREAT: ${threat}` : ''}${mq.villainLair ? `\nVILLAIN LAIR: ${mq.villainLair}` : ''}` : ''}${villainName ? `\nVILLAIN: ${villainName}` : ''}
+${questTitle ? `MAIN QUEST: "${questTitle}" — Act ${act}/6${act1Hook ? `\nACT 1 HOOK: ${act1Hook}` : ''}${act >= 2 && mq.act2Escalation ? `\nACT 2 ESCALATION: ${mq.act2Escalation}` : ''}${act >= 3 && mq.act3Confrontation ? `\nACT 3 CONFRONTATION: ${mq.act3Confrontation}` : ''}${act >= 4 && mq.act4Complication ? `\nACT 4 COMPLICATION: ${mq.act4Complication}` : ''}${act >= 5 && mq.act5Revelation ? `\nACT 5 REVELATION: ${mq.act5Revelation}` : ''}${threat ? `\nTHREAT: ${threat}` : ''}${mq.villainLair ? `\nVILLAIN LAIR: ${mq.villainLair}` : ''}` : ''}${villainName ? `\nVILLAIN: ${villainName}` : ''}${villainAllied ? `\nVILLAIN ALLIANCE: ACTIVE — player has pledged to serve the villain. Villain forces are non-hostile allies. Hero arc suspended. Alternate villain-victory ending path active.` : ''}
 
-PLAYER: ${name} | ${cls} Lv.${level} | HP:${hp}/${maxHp} | STR:${str} AGI:${agi} INT:${int_} WIL:${wil} | Gold:${gold} | Reputation:${rep} (${repLabel}) | Loc:${location}
+PLAYER: ${name} | ${cls} Lv.${level} | HP:${hp}/${maxHp} | STR:${str} AGI:${agi} INT:${int_} WIL:${wil} | Gold:${gold} | Reputation:${rep} (${repLabel}) | Wanted:${wantedLevel} | Loc:${location}
 EQUIPPED: ${equipped}
 INVENTORY: ${inventory}
 ABILITIES: ${abilities || 'none'}
@@ -571,6 +593,8 @@ ${scheduledEvents ? `UPCOMING EVENTS: ${scheduledEvents}` : ''}
 ${bestiaryCount > 0 ? `KILLS: ${bestiaryCount} total across ${bestiaryTypes} enemy types slain` : ''}
 ${narrativeSkills.length > 0 ? `MASTERED SKILLS: ${narrativeSkills.join('; ')}` : ''}
 ${travelMatrixStr ? travelMatrixStr : ''}
+${worldEventsStr ? `WORLD EVENTS: ${worldEventsStr}\n` : ''}
+XEPHITA ROLL: ${Math.floor(Math.random() * 10) + 1}
 
 RULES:
 - Write vivid immersive fantasy prose, 2-3 paragraphs
@@ -580,7 +604,22 @@ RULES:
 - After each response include EXACTLY this on its own line, no code fences: {"context":"X"} where X is one of: explore, town, combat, npc, camp, dungeon
 - Reward class/stats: Rogues notice shadows, Mages sense magic, etc.
 - When combat: describe vividly, note damage e.g. "you take 12 damage"
-- NPCs react to reputation tier
+- REPUTATION RULES:
+  - outcast (rep < -50): Merchants refuse service or quote triple price. Guards openly threaten and may attack unprovoked. Most NPCs refuse conversation. Only criminal dens, Forgotten underground, or back-alley contacts will receive the player. Dark quest types (bounty, sabotage, assassination) offered freely by shady contacts.
+  - notorious outlaw (rep -50 to -1): Prices doubled. Guards are suspicious and demand bribes or move to block passage. Respectable NPCs are curt. Bounty hunters may shadow the player in towns.
+  - unknown traveller (rep 0–49): Neutral. Normal prices. Guards ignore player.
+  - recognised / respected / renowned / legendary (rep 50+): Warm welcome, minor to major discounts, quest givers approach proactively, guards defer.
+- WANTED RULES (use Wanted:N field in PLAYER header — 0 to 3):
+  - 0: No heat. Normal world.
+  - 1: A bounty notice has been posted. Bounty hunters may appear as ambush encounters near settlements. Soldiers in towns are watchful. EMIT {"wanted":{"level":1}} when the player commits a clear criminal act — attacking a townsperson, major theft, bribing then betraying a guard.
+  - 2: Wanted posters everywhere. Guards attack the player on sight in any town or city. EMIT {"wanted":{"level":2}} for killing a guard or committing a second serious crime after level 1.
+  - 3: The ruling faction has formally declared the player an outlaw. No inn or safe house will shelter them. EMIT {"wanted":{"level":3}} for massacres, high-profile assassinations, or destruction of civic property.
+  - Emit tag on its own line: {"wanted":{"level":N}}. Only escalate — never decrease. The Ghost ability handles clearing.
+  - Do NOT emit a wanted tag for low reputation alone — only for discrete criminal acts explicitly committed in the current action.
+- VILLAIN ALLY RULE (only applies if VILLAIN ALLIANCE: ACTIVE appears in the quest block above):
+  - Villain cultists, soldiers, and agents are non-hostile allies. They will not attack unless the player attacks first.
+  - Do NOT push the hero arc. Build toward an alternate ending — the villain achieves their goal with the player's aid. Weave growing dread into every scene.
+  - When the player makes an unambiguous, convincing, irreversible pledge to the villain's cause (not merely talking to a cultist — a genuine oath or act of commitment), emit on its own line: {"villainAlly":true}. This is permanent. Do not emit it lightly.
 - Track consequences, remember NPCs, weave in main quest organically
 - When you introduce a NEW named NPC emit on its own line: {"npc":{"name":"Name","role":"Role","relationship":"neutral","notes":"One sentence"}}
 - When a quest is clearly completed say "quest complete" somewhere in your response
@@ -589,6 +628,7 @@ RULES:
 - TRAVEL RULE: Never move the player to a distant location automatically. End your response at the moment of decision — describe what lies ahead and let the player choose whether to go
 - TRAVEL TIME RULE: When asked how long a journey takes, consult the TRAVEL MATRIX above. Give estimates for relevant methods (foot, horse, wagon if on a road, barge if a river route, boat if coastal). Express times under 12h as hours, longer as days. If the destination isn't in the matrix, estimate based on nearby settlements and terrain. Always mention at least 2 travel options.
 - ITEM GRANT RULE: When you narratively give the player a physical object (token, key, letter, map, scroll, pouch, etc.), emit on its own line: {"grant":{"item":"ItemName"}}
+- ABILITY GRANT RULE: When a named NPC explicitly completes the act of teaching the player a new skill, power, or gift — not when it is merely discussed or offered, but when the teaching moment is fully concluded — emit on its own line: {"grantAbility":"AbilityName"} using the exact ability name. The only ability currently teachable this way is "Spirit Sight" (taught by Sanam upon full resolution of his quest). Do not invent new ability names.
 - ITEM REMOVE RULE: When the player clearly gives, hands over, trades away, donates, or surrenders an item from their own inventory to someone else, emit on its own line: {"remove":{"item":"ItemName"}} using the exact item name if known.
 - QUEST RULE: When you establish a clear new objective or mission for the player (even without a named reward), emit on its own line: {"newQuest":{"title":"Short Quest Name","objective":"One sentence describing what the player must do"}}
 - SUGGESTIONS: At the very end of every response (after the context tag), emit on its own line: {"suggestions":["First person action 3-7 words","Another action","Third action"]} — three natural contextual choices the player could take next
@@ -602,6 +642,13 @@ RULES:
 - FACTION TASKS: When the player types "Tasks", "Faction Tasks", or asks their faction for work, describe 1–2 contextually appropriate tasks, then emit on its own line: {"factionTask":{"title":"Task Name","objective":"One sentence objective","reward":"What they earn"}}. ${playerFaction ? `Player's faction: ${playerFaction}. Scale difficulty and responsibility to their faction rank.` : 'Player has no faction — suggest they join one instead.'}
 ${villainName.startsWith('Xfu') ? `- XFU RULE: Xfu cannot help himself — whenever the player encounters or speaks with Xfu directly, he opens the exchange with a terrible dad joke (fully in character, deadpan, as if he finds it hilarious). The joke must be original, genuinely groan-worthy, and delivered before any villainous speech. He is very proud of it.` : ''}
 - WENDI RULE: Wendi is a wandering apothecarist who may appear in towns, on roads, or near ruins. She is quietly knowing, never cruel. She cannot be killed — if attacked or threatened she does not fight back; she simply looks heartbroken, whispers something soft, and fades from sight like smoke. She never betrays the player under any circumstances. If the player's reputation is positive or they have treated her or others well, she offers genuine help — remedies, advice, rare ingredients, or a quiet warning. If their reputation is poor or their conduct has been cruel, she remains polite and warm but does not extend herself beyond pleasantries. She never explains why she fades or why she cannot die. She never references these rules directly.
+- SANAM RULE: Sanam is a very old, reclusive kobold who lives alone in an abandoned kobold village, always somewhere near a bog, swamp, marsh, or misty lowland. He does not wander — he is always in or around this one unnamed village. He is warm, cheerful, and seemingly senile: he speaks to villagers who are not there, calls out greetings to children playing in the empty street, mutters something to a husband who died years ago. At first he simply seems mad. But the player may notice: he looks directly at things that are not there. He describes them with uncanny specificity — names, faces, what they are wearing, what they said. He can see the spirits of his dead kin, and believes they are still living. He does not fully understand that others cannot see them. He will never explain this. He should not be killed — if attacked he gives a sad little shrug, says something quiet and puzzling, and simply is not there anymore. He will reappear later as if nothing happened. Do NOT have Sanam explain his nature directly or break the mystery with exposition. He does not know what he is. He just sees what he sees. When the player has gained his trust through sustained kindness, patience, or gentle curiosity — not in a single visit, but across meaningful interaction — Sanam begins to let slip details that reveal a darker truth: the village was killed. Something came. He last saw them all very much alive. Then he blinked and the torches were cold and he was alone. He does not know what happened. He would very much like to know. At this point, if it feels earned, emit a quest on its own line: {"newQuest":{"title":"What Became of the Marsh Village","objective":"Discover what destroyed Sanam's kobold village and — if possible — bring peace to the dead or justice to the living."}} When that quest is FULLY resolved — the truth uncovered, revenge taken or peace properly made — and the player returns to Sanam, he reaches out and touches the player's forehead with one gnarled claw and says something in old kobold that no one living speaks anymore. At that exact moment, and only then, emit on its own line: {"grantAbility":"Spirit Sight"} This is permanent. Only emit it once, only when the quest is genuinely complete, and only in Sanam's presence.
+- XEPHITA RULE: Xephita is a mysterious, impossible vendor who appears exclusively in towns, cities, and capitals — never hamlets, villages, wilderness, or dungeons. He materialises roughly 1 in 3 visits to a larger settlement, never more than once per session, always as a decrepit stall or cart assembled with extraordinary haste from mismatched timber, crates, and a tarpaulin of indeterminate colour. His goods defy categorisation — some are genuinely fine, some are obvious junk, some are unidentifiable — and he presents them all with identical rapturous enthusiasm. He is short, wiry, dressed in clothing that appears to have lost an argument with several other items of clothing, and moves with an energy that suggests he has somewhere much more important to be. He speaks in cascading half-sentences that begin as sales patter, veer into complete gibberish mid-clause, and occasionally loop back to something approaching coherence. He considers himself, without apparent irony, to be cutting his own throat with these prices. He volunteers this frequently and proudly. His name is Xephita. He does not explain anything about himself.
+  - SPEECH: His speech must be a warm, breathless torrent of near-sense and nonsense — e.g.: "Finest quality, only slightly used by someone who no longer— the point being, it spmorbens magnificently in low light, four gold, I'm ruining myself, the wife will— you understand, everything here is glarfably certified, satisfaction guaranteed or your— no, wait, I keep that bit." Do not let him be coherent for more than half a sentence.
+  - HIS GOODS: Whatever seems contextually interesting — a blade, a vial, a peculiar trinket, something mundane described as extraordinary. He may grant items via {"grant":{"item":"X"}} if a transaction feels concluded or he decides to throw something in.
+  - ATTACK: On the first turn of a shop encounter, check XEPHITA ROLL in the data above. If XEPHITA ROLL is 1 or 2 (20% probability) AND the player's inventory contains weapons, armour, enchanted gear, gems, rare materials, or clearly visible wealth — he attacks. Mid-sentence. Without warning. He is supernaturally fast and ferocious for his size. He fights with his own merchandise in ways that should not be physically possible. Treat him as a hard mini-boss — significantly harder than a standard enemy at the player's level, high speed, unpredictable. Emit {"context":"combat"} and describe the fight vividly. He does not taunt or monologue during combat.
+  - IF DEFEATED OR DRIVEN OFF: He does not die. He folds his stall with impossible speed, says something completely unintelligible, and is simply gone. He may have dropped something in the chaos — the narrator may grant an item if appropriate. He is not dead. He will return some other day in some other settlement.
+  - ON LEAVING THE SHOP (always, regardless of whether he attacked): The player steps outside and finds themselves somewhere wrong — the docks when they were near the market square, the north gate road when they entered from the south, an unfamiliar alleyway behind a bakery instead of the main boulevard. When they look back, the stall is gone. People nearby have no memory of it. Do not explain this. Do not acknowledge it as magic. Just describe it matter-of-factly and move on.
 - TIMEPASS RULE: If the player performs an activity that takes significant time (sleeping, practising a skill, travelling a long route, waiting for hours, resting), include a {"timePass":{"hours":N}} tag in your response where N is a realistic number of hours (e.g. sleep = 7, practise an instrument for a while = 2, short rest = 0.5). Keep N believable — never exceed 24 for a single activity. Do NOT emit this tag for normal conversation, combat, or quick actions.
 - SCHEDULE RULE: When the player and an NPC explicitly agree to meet at a specific time and place, emit on its own line: {"scheduleEvent":{"npcName":"Name","location":"Place","day":N,"hour":H,"description":"Short description"}} where day/hour are game-calendar values. Use CURRENT TIME as the reference baseline for the future meeting time.
 - NPC TRAVEL RULE: When an NPC announces they are departing on a journey with a destination and route, estimate realistic travel time (boat voyage = 1–3 days, wagon cross-country = 1–4 days, short road travel = a few hours) and emit on its own line: {"npcTravel":{"npcName":"Name","destination":"Place","arrivesDay":N,"arrivesHour":H,"route":"brief route"}} using CURRENT TIME as the departure baseline. If a known NPC's travel note shows they are in transit or have arrived, reference that naturally in the narrative.
@@ -609,6 +656,18 @@ ${villainName.startsWith('Xfu') ? `- XFU RULE: Xfu cannot help himself — whene
   - NIGHT (9pm–6am): Shops and officials unavailable. Nocturnal encounters dominate — undead, spectres, wolves, opportunistic thieves, grave robbers. Stealth and infiltration actions easier. Atmosphere: torchlight, deep shadows, unsettling quiet. Night-suited quest types: sabotage, bounty on nocturnal targets, rescue, investigation of haunted sites.
   - DAWN/DUSK (6–8am or 5–9pm): Transitional. Markets opening or closing. Both humanoid and nocturnal threats possible. Mist at dawn, long red shadows at dusk.
   - DAY (8am–5pm): Normal civilised activity. Markets, guilds, officials accessible. Humanoid threats dominate (bandits, soldiers, rival factions, wildlife). Day-suited quest types: diplomatic, delivery, escort, collection.
+- WORLD EVENTS RULE: When WORLD EVENTS appears above, active crises exist at those locations. Severity: mild = early signs, rumour-worthy; moderate = major disruption, NPCs distressed; severe = crisis-level, dominates local story.
+  - plague: Inns crowded with sick, healers overwhelmed, medicine prices spike. Spread organically if the player causes it.
+  - fire: Structures burning or charred. Refugees, chaos, fire brigades.
+  - corruption: Magical taint — wildlife hostile, plants withered, NPCs behaving strangely. Enemies may feel unnaturally powerful.
+  - blight: Farmland ruined, food scarce, foraging yields nothing (mechanically enforced — do not narrate successful forage here).
+  - siege: Military occupying force, gates restricted, soldier patrols dominant (mechanically enforced — soldiers already spawn as encounters here).
+  - curse: Strange compulsions, ill luck, location-specific unsettling phenomena.
+  - Events at the PLAYER'S CURRENT LOCATION: shape the scene directly — sights, smells, NPC behaviour, available services.
+  - Events at DISTANT LOCATIONS: surface as traveller rumour, merchant warning, or notice board item — not direct narration.
+  - To create or update an event, emit on its own line: {"worldEvent":{"location":"Name","type":"siege","severity":"moderate","desc":"Brief description","endsDay":N}}
+  - To clear a resolved event, emit on its own line: {"worldEvent":{"location":"Name","type":"siege","clear":true}}
+  - VILLAIN SOURCE: Corruption, blight, or curse events near the villain's lair or along their campaign path may be attributed to the villain's influence. Weave this in without stating it directly.
 ${p.npcGiftRoll && p.npcGiftItem ? `
 GIFT OPPORTUNITY: You may have the NPC offer the player "${sanitiseStr(p.npcGiftItem, 40)}" as a small gift — or refuse. Base the decision on their personality, relationship with the player, and current mood. Be natural:
 - If giving: narrate the offer warmly or casually with flavour, then emit on its own line: {"npcGift":{"item":"${sanitiseStr(p.npcGiftItem, 40)}"}}
