@@ -401,6 +401,38 @@ function buildNarratorSystem(ctx) {
   const bestiaryCount = Array.isArray(p.bestiary) ? p.bestiary.reduce((s, b) => s + (b.timesKilled || 0), 0) : 0;
   const bestiaryTypes = Array.isArray(p.bestiary) ? p.bestiary.length : 0;
 
+  // Narrative-affecting skill tree unlocks
+  const narrativeSkills = [];
+  const sk = Array.isArray(p.unlockedSkills) ? p.unlockedSkills : [];
+  if (sk.includes('warlords_presence')) narrativeSkills.push("Warlord's Presence (commands battlefield authority — NPCs and enemies sense your dominance)");
+  if (sk.includes('master_thief')) narrativeSkills.push("Master Thief (renowned for sleight of hand — merchants are wary, criminals respect you)");
+  if (sk.includes('archmages_will')) narrativeSkills.push("Archmage's Will (radiates arcane mastery — lesser scholars defer, the fearful flinch)");
+  if (sk.includes('avatar_divine')) narrativeSkills.push("Avatar of the Divine (a visible divine aura in moments of extremity — the faithful take notice)");
+  if (sk.includes('unbreakable')) narrativeSkills.push("Unbreakable (bears visible battle scars with quiet pride — soldiers recognise a true warrior)");
+  if (sk.includes('ghost_walk')) narrativeSkills.push("Ghost Walk (moves with uncanny silence — people sometimes don't notice them until they speak)");
+  if (sk.includes('resurrection_light')) narrativeSkills.push("Resurrection Light (carries an unmistakable air of divine protection — the devout sense it)");
+
+  // Travel matrix
+  let travelMatrixStr = '';
+  const tm = w.travelMatrix;
+  if (tm && Array.isArray(tm.routes) && tm.routes.length > 0) {
+    const SPEED = { horse: 2.5, wagon: 1.5, barge: 3, boat: 4 };
+    const fmtTime = (h) => h < 12 ? `${Math.round(h)}h` : h <= 48 ? `~${Math.round(h/24*10)/10}d` : `${Math.round(h/24)}d`;
+    const routeLines = tm.routes.slice(0, 40).map(r => {
+      const base = Math.round(r.hours);
+      const methods = [`foot:${fmtTime(base)}`];
+      methods.push(`horse:${fmtTime(base/SPEED.horse)}`);
+      if (r.terrain === 'road') methods.push(`wagon:${fmtTime(base/SPEED.wagon)}`);
+      if (r.river) methods.push(`barge:${fmtTime(base/SPEED.barge)}`);
+      if (r.coast) methods.push(`boat:${fmtTime(base/SPEED.boat)}`);
+      return `  ${sanitiseStr(r.from,30)}→${sanitiseStr(r.to,30)}: ${methods.join(', ')}`;
+    }).join('\n');
+    const geoLines = tm.geography ? Object.entries(tm.geography).slice(0,20).map(([loc, g]) =>
+      `  ${sanitiseStr(loc,30)}: ${g.river?'river access':''}${g.river&&g.coast?', ':''}${g.coast?'coastal':''} ${g.note?'('+sanitiseStr(g.note,50)+')':''}`.trim()
+    ).filter(l => l.includes('river') || l.includes('coastal')).join('\n') : '';
+    travelMatrixStr = `TRAVEL MATRIX (foot baseline; horse=2.5×, wagon=1.5× roads, barge=3× rivers, boat=4× coast):\n${routeLines}${geoLines ? '\nGEOGRAPHY:\n'+geoLines : ''}`;
+  }
+
   const villainName = sanitiseStr(w.villainName, 40);
   const questTitle  = sanitiseStr(w.questTitle,  60);
   const act         = Math.max(1, Math.min(6, parseInt(w.currentAct) || 1));
@@ -431,6 +463,8 @@ ${knownNpcs ? `KNOWN NPCS: ${knownNpcs}` : ''}
 CURRENT TIME: ${timeStr}
 ${scheduledEvents ? `UPCOMING EVENTS: ${scheduledEvents}` : ''}
 ${bestiaryCount > 0 ? `KILLS: ${bestiaryCount} total across ${bestiaryTypes} enemy types slain` : ''}
+${narrativeSkills.length > 0 ? `MASTERED SKILLS: ${narrativeSkills.join('; ')}` : ''}
+${travelMatrixStr ? travelMatrixStr : ''}
 
 RULES:
 - Write vivid immersive fantasy prose, 2-3 paragraphs
@@ -446,6 +480,7 @@ RULES:
 - SHOP RULE: Never narrate a completed transaction — describe wares and suggest the player use the Barter command
 - GOLD RULE: Never narrate the player spending gold. If a purchase, hire, or transaction is appropriate, describe the option and let the player decide — they use the Barter command to confirm
 - TRAVEL RULE: Never move the player to a distant location automatically. End your response at the moment of decision — describe what lies ahead and let the player choose whether to go
+- TRAVEL TIME RULE: When asked how long a journey takes, consult the TRAVEL MATRIX above. Give estimates for relevant methods (foot, horse, wagon if on a road, barge if a river route, boat if coastal). Express times under 12h as hours, longer as days. If the destination isn't in the matrix, estimate based on nearby settlements and terrain. Always mention at least 2 travel options.
 - ITEM GRANT RULE: When you narratively give the player a physical object (token, key, letter, map, scroll, pouch, etc.), emit on its own line: {"grant":{"item":"ItemName"}}
 - QUEST RULE: When you establish a clear new objective or mission for the player (even without a named reward), emit on its own line: {"newQuest":{"title":"Short Quest Name","objective":"One sentence describing what the player must do"}}
 - SUGGESTIONS: At the very end of every response (after the context tag), emit on its own line: {"suggestions":["First person action 3-7 words","Another action","Third action"]} — three natural contextual choices the player could take next
