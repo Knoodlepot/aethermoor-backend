@@ -99,6 +99,15 @@ async function initDb() {
       floor       INTEGER NOT NULL,
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS game_saves (
+      player_id     TEXT PRIMARY KEY,
+      player_json   TEXT NOT NULL,
+      seed_json     TEXT NOT NULL,
+      messages_json TEXT NOT NULL DEFAULT '[]',
+      narrative     TEXT NOT NULL DEFAULT '',
+      log_json      TEXT NOT NULL DEFAULT '[]',
+      saved_at      TIMESTAMPTZ DEFAULT NOW()
+    );
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verified     BOOLEAN DEFAULT TRUE;
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verify_token TEXT;
   `);
@@ -389,6 +398,9 @@ function buildNarratorSystem(ctx) {
       }).join('; ')
     : '';
 
+  const bestiaryCount = Array.isArray(p.bestiary) ? p.bestiary.reduce((s, b) => s + (b.timesKilled || 0), 0) : 0;
+  const bestiaryTypes = Array.isArray(p.bestiary) ? p.bestiary.length : 0;
+
   const villainName = sanitiseStr(w.villainName, 40);
   const questTitle  = sanitiseStr(w.questTitle,  60);
   const act         = Math.max(1, Math.min(6, parseInt(w.currentAct) || 1));
@@ -418,6 +430,7 @@ CURRENT CONTEXT: ${context}
 ${knownNpcs ? `KNOWN NPCS: ${knownNpcs}` : ''}
 CURRENT TIME: ${timeStr}
 ${scheduledEvents ? `UPCOMING EVENTS: ${scheduledEvents}` : ''}
+${bestiaryCount > 0 ? `KILLS: ${bestiaryCount} total across ${bestiaryTypes} enemy types slain` : ''}
 
 RULES:
 - Write vivid immersive fantasy prose, 2-3 paragraphs
@@ -1032,6 +1045,37 @@ app.post('/admin/dungeon/monthly-draw', async (req, res) => {
   } catch (err) {
     console.error('Monthly draw error:', err.message);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Cloud Saves ────────────────────────────────────────────────
+app.get('/save', authenticateToken, async (req, res) => {
+  const { playerId } = req.account;
+  try {
+    const result = await db.query('SELECT * FROM game_saves WHERE player_id = $1', [playerId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'no_save' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('[SAVE GET]', err.message);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+app.post('/save', authenticateToken, async (req, res) => {
+  const { playerId } = req.account;
+  const { player_json, seed_json, messages_json, narrative, log_json } = req.body;
+  if (!player_json || !seed_json) return res.status(400).json({ error: 'missing_fields' });
+  try {
+    await db.query(`
+      INSERT INTO game_saves (player_id, player_json, seed_json, messages_json, narrative, log_json, saved_at)
+      VALUES ($1,$2,$3,$4,$5,$6,NOW())
+      ON CONFLICT (player_id) DO UPDATE SET
+        player_json=$2, seed_json=$3, messages_json=$4, narrative=$5, log_json=$6, saved_at=NOW()
+    `, [playerId, player_json, seed_json, messages_json || '[]', narrative || '', log_json || '[]']);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[SAVE POST]', err.message);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
