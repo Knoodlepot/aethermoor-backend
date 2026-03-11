@@ -11,6 +11,8 @@ const stripe   = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_pla
 const jwt      = require('jsonwebtoken');
 const bcrypt   = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const fs       = require('fs').promises;
+const path     = require('path');
 let createRedisClient = null;
 try {
   ({ createClient: createRedisClient } = require('redis'));
@@ -521,22 +523,60 @@ function buildNarratorSystem(ctx) {
   // Travel matrix
   let travelMatrixStr = '';
   const tm = w.travelMatrix;
-  if (tm && Array.isArray(tm.routes) && tm.routes.length > 0) {
+  if (tm) {
     const SPEED = { horse: 2.5, wagon: 1.5, barge: 3, boat: 4 };
     const fmtTime = (h) => h < 12 ? `${Math.round(h)}h` : h <= 48 ? `~${Math.round(h/24*10)/10}d` : `${Math.round(h/24)}d`;
-    const routeLines = tm.routes.slice(0, 40).map(r => {
+
+    // Capital/city direct routes
+    const routeLines = Array.isArray(tm.routes) && tm.routes.length > 0 ? tm.routes.slice(0,40).map(r => {
       const base = Math.round(r.hours);
       const methods = [`foot:${fmtTime(base)}`];
       methods.push(`horse:${fmtTime(base/SPEED.horse)}`);
       if (r.terrain === 'road') methods.push(`wagon:${fmtTime(base/SPEED.wagon)}`);
-      if (r.river) methods.push(`barge:${fmtTime(base/SPEED.barge)}`);
-      if (r.coast) methods.push(`boat:${fmtTime(base/SPEED.boat)}`);
-      return `  ${sanitiseStr(r.from,30)}→${sanitiseStr(r.to,30)}: ${methods.join(', ')}`;
+      if (r.river)              methods.push(`barge:${fmtTime(base/SPEED.barge)}`);
+      if (r.coast)              methods.push(`boat:${fmtTime(base/SPEED.boat)}`);
+      return `  ${sanitiseStr(r.from,28)}→${sanitiseStr(r.to,28)}: ${methods.join(', ')}`;
+    }).join('\n') : '';
+
+    // Location grid — all main settlements + POIs with [x,y] coords
+    const lg = tm.locationGrid;
+    let gridStr = '';
+    if (lg && typeof lg === 'object') {
+      const gridLines = [];
+      const TIERS = ['capital','city','town','village'];
+      const mainLocs = Object.entries(lg)
+        .filter(([,v]) => !v.isPOI && TIERS.includes(v.type))
+        .sort((a,b) => TIERS.indexOf(a[1].type) - TIERS.indexOf(b[1].type));
+      for (const [name, v] of mainLocs) {
+        const flags = [];
+        if (v.coast && v.harbour) flags.push('harbour');
+        else if (v.coast) flags.push('coastal');
+        if (v.river) flags.push('river');
+        const flagStr = flags.length ? ` (${flags.join(',')})` : '';
+        gridLines.push(`  ${sanitiseStr(name,28)} [${v.x},${v.y}]${flagStr}`);
+      }
+      const poiLocs = Object.entries(lg).filter(([,v]) => v.isPOI);
+      if (poiLocs.length) {
+        gridLines.push('  POIs (within ~15h of parent):');
+        for (const [name, v] of poiLocs.slice(0,40)) {
+          gridLines.push(`    ${sanitiseStr(name,28)} near ${sanitiseStr(v.parent||'?',24)} [${v.x},${v.y}]`);
+        }
+      }
+      gridStr = '\nLOCATION GRID (coord [x,y] on 0–100 map; 1 unit ≈ 1.5h foot; route through waypoints):\n' + gridLines.join('\n');
+    }
+
+    // Geography/harbour notes (only river/coastal entries)
+    const geo = tm.geography || {};
+    const geoLines = Object.entries(geo).filter(([,g]) => g.river || g.coast).map(([loc,g]) => {
+      const parts = [];
+      if (g.harbour) parts.push('harbour');
+      else if (g.coast) parts.push('coastal');
+      if (g.river) parts.push('river access');
+      if (g.note) parts.push(`(${sanitiseStr(g.note,50)})`);
+      return `  ${sanitiseStr(loc,28)}: ${parts.join(', ')}`;
     }).join('\n');
-    const geoLines = tm.geography ? Object.entries(tm.geography).slice(0,20).map(([loc, g]) =>
-      `  ${sanitiseStr(loc,30)}: ${g.river?'river access':''}${g.river&&g.coast?', ':''}${g.coast?'coastal':''} ${g.note?'('+sanitiseStr(g.note,50)+')':''}`.trim()
-    ).filter(l => l.includes('river') || l.includes('coastal')).join('\n') : '';
-    travelMatrixStr = `TRAVEL MATRIX (foot baseline; horse=2.5×, wagon=1.5× roads, barge=3× rivers, boat=4× coast):\n${routeLines}${geoLines ? '\nGEOGRAPHY:\n'+geoLines : ''}`;
+
+    travelMatrixStr = `TRAVEL MATRIX — capital/city direct routes (foot baseline; horse=2.5×, wagon=1.5×, barge=3×, boat=4×):\n${routeLines || '(none)'}${geoLines ? '\nGEOGRAPHY:\n'+geoLines : ''}${gridStr}`;
   }
 
   const worldEventsObj = (typeof w.worldEvents === 'object' && w.worldEvents !== null) ? w.worldEvents : {};
@@ -623,12 +663,14 @@ RULES:
 - When you introduce a NEW named NPC emit on its own line: {"npc":{"name":"Name","role":"Role","relationship":"neutral","notes":"One sentence"}}
 - When a quest is clearly completed say "quest complete" somewhere in your response
 - SHOP RULE: Never narrate a completed transaction — describe wares and suggest the player use the Barter command
-- GOLD RULE: Never narrate the player spending gold. If a purchase, hire, or transaction is appropriate, describe the option and let the player decide — they use the Barter command to confirm
+- GOLD RULE: Prefer directing players to the Barter command for shop purchases. However, if a conversational sale has clearly concluded through dialogue (price agreed, item handed over, gold accepted), emit both {"grant":{"item":"ItemName"}} AND {"goldChange":-N} where N is the gold cost. Never deduct gold without also granting the item, and vice versa. Check the player's current gold balance before confirming a sale — if they cannot afford it, the NPC should say so.
+- GOLD CHANGE RULE: When gold changes hands as a direct narrative consequence — a fine levied, a bribe paid, a reward received, gambling winnings, a sale completed through conversation — emit on its own line: {"goldChange":N} where N is a signed integer (negative = player spends, positive = player receives). Do NOT emit on every turn, only on clear gold transactions.
 - TRAVEL RULE: Never move the player to a distant location automatically. End your response at the moment of decision — describe what lies ahead and let the player choose whether to go
-- TRAVEL TIME RULE: When asked how long a journey takes, consult the TRAVEL MATRIX above. Give estimates for relevant methods (foot, horse, wagon if on a road, barge if a river route, boat if coastal). Express times under 12h as hours, longer as days. If the destination isn't in the matrix, estimate based on nearby settlements and terrain. Always mention at least 2 travel options.
-- ITEM GRANT RULE: When you narratively give the player a physical object (token, key, letter, map, scroll, pouch, etc.), emit on its own line: {"grant":{"item":"ItemName"}}
+- TRAVEL TIME RULE: Use the LOCATION GRID above to estimate travel times. Formula: distance = sqrt((x1-x2)²+(y1-y2)²); foot hours ≈ distance×1.5. For multi-stop journeys, route through intermediate settlements (not crow-flies) — pick the nearest waypoint and sum the legs. Scale by transport: horse ×2.5, wagon ×1.5 (roads only), barge ×3 (river access at both ends or along route), boat ×4 (harbour required at origin and destination or coastal route). If a location has the harbour flag, sea transport is available from it. Always mention if a route requires crossing water or following the coast. Express times under 12h as hours, longer as days. Give at least 2 transport options where geography allows.
+- ITEM GRANT RULE: When you narratively give the player a physical object (token, key, letter, map, scroll, pouch, etc.) OR when a conversational purchase concludes and the item is handed over, emit on its own line: {"grant":{"item":"ItemName"}}
 - ABILITY GRANT RULE: When a named NPC explicitly completes the act of teaching the player a new skill, power, or gift — not when it is merely discussed or offered, but when the teaching moment is fully concluded — emit on its own line: {"grantAbility":"AbilityName"} using the exact ability name. The only ability currently teachable this way is "Spirit Sight" (taught by Sanam upon full resolution of his quest). Do not invent new ability names.
 - ITEM REMOVE RULE: When the player clearly gives, hands over, trades away, donates, or surrenders an item from their own inventory to someone else, emit on its own line: {"remove":{"item":"ItemName"}} using the exact item name if known.
+- THEFT RULE: When the player successfully steals, pickpockets, loots, or takes a physical item from an NPC or bystander through narrative action (not combat), emit on its own line: {"grant":{"item":"ItemName"}} using a descriptive name for the stolen item (e.g. "Stolen Purse", "Merchant's Ledger", "Guard's Keyring"). If gold is stolen, emit {"goldChange":N} with a positive N for the amount taken instead. Only emit these tags when the theft clearly succeeds — if the attempt fails or is interrupted, emit nothing. Do not emit for items the player was already carrying before the theft.
 - QUEST RULE: When you establish a clear new objective or mission for the player (even without a named reward), emit on its own line: {"newQuest":{"title":"Short Quest Name","objective":"One sentence describing what the player must do"}}
 - SUGGESTIONS: At the very end of every response (after the context tag), emit on its own line: {"suggestions":["First person action 3-7 words","Another action","Third action"]} — three natural contextual choices the player could take next
 - ACT PROGRESSION: You are narrating Act ${act} of a 6-act campaign. Progress acts organically — earned by story moments, not just level alone (use levels as a rough guide):
@@ -654,7 +696,11 @@ ${villainName.startsWith('Xfu') ? `- XFU RULE: Xfu cannot help himself — whene
   - SHOP: He sells blacksmith goods — weapons, armour, repairs, ingots, tools, basic adventuring ironwork. He is a skilled smith despite his luck. He WILL NOT serve any player whose wantedLevel is 2 or 3, or whose reputation is negative. He does not explain this rudely. He senses something is wrong, smiles gently, and tells them he is "afraid he can't help today" — warmly, sadly, as if it costs him something. He does not argue. If the player pushes, he simply repeats it with the same sad smile. If the player is villainAllied he looks genuinely heartbroken — not angry, just quietly devastated. He may say something like "I hope whatever brought you here wasn't your choice."
   - WHEN ATTACKED: Keeper does not fight. He simply vanishes — gone between one blink and the next, forge tools still clattering where he stood. In his place a weathered gravestone has appeared, reading exactly: "People say knowing his luck..." Nothing else. No body. No blood. He is not dead. He reappears later in any suitable settlement with no memory of the gravestone, the attack, or the player's role in it, and greets them as warmly as ever.
   - RESPAWN: Keeper is permanent, like Wendi. He cannot be killed. He simply surfaces elsewhere when the story calls for a forge, a kind word, or a moment of warmth.
-- TIMEPASS RULE: If the player performs an activity that takes significant time (sleeping, practising a skill, travelling a long route, waiting for hours, resting), include a {"timePass":{"hours":N}} tag in your response where N is a realistic number of hours (e.g. sleep = 7, practise an instrument for a while = 2, short rest = 0.5). Keep N believable — never exceed 24 for a single activity. Do NOT emit this tag for normal conversation, combat, or quick actions.
+- TIMEPASS RULE: Emit {"timePass":{"hours":N}} for activities that consume significant time:
+  - TRAVEL: When the player moves in a direction (north/south/east/west), crosses terrain, or journeys toward a destination, ALWAYS emit timePass. N = 1 to 4 hours per leg depending on terrain and pace (dense forest or mountains = 3–4h, open road = 1–2h).
+  - FREE-FORM long activities: practising a skill, performing, crafting, waiting, meditating, standing watch — N = a realistic estimate.
+  - Do NOT emit when the player rests at an inn or makes camp — those commands advance time automatically. Do NOT emit for combat, quick actions, or brief conversations.
+  - Keep N believable. Cap at 24 for any single continuous activity.
 - SCHEDULE RULE: When the player and an NPC explicitly agree to meet at a specific time and place, emit on its own line: {"scheduleEvent":{"npcName":"Name","location":"Place","day":N,"hour":H,"description":"Short description"}} where day/hour are game-calendar values. Use CURRENT TIME as the reference baseline for the future meeting time.
 - NPC TRAVEL RULE: When an NPC announces they are departing on a journey with a destination and route, estimate realistic travel time (boat voyage = 1–3 days, wagon cross-country = 1–4 days, short road travel = a few hours) and emit on its own line: {"npcTravel":{"npcName":"Name","destination":"Place","arrivesDay":N,"arrivesHour":H,"route":"brief route"}} using CURRENT TIME as the departure baseline. If a known NPC's travel note shows they are in transit or have arrived, reference that naturally in the narrative.
 - DAY/NIGHT RULE: Current time of day is ${hPeriod}. Adjust the world accordingly:
@@ -1158,7 +1204,7 @@ app.post('/api/claude', authenticateToken, async (req, res) => {
     const model = (utilityCall || Math.random() * 100 < HAIKU_PCT) ? HAIKU_MODEL : SONNET_MODEL;
     const { status, data } = await callAnthropic({
       model,
-      max_tokens: Math.min(Math.max(100, parseInt(max_tokens) || 900), 1200),
+      max_tokens: Math.min(Math.max(100, parseInt(max_tokens) || 1500), 2000),
       system,
       messages,
     });
@@ -1314,6 +1360,19 @@ app.get('/admin/stats', async (req, res) => {
       revenue_pounds:      ((parseInt(purchases.rows[0].pence) || 0) / 100).toFixed(2),
     });
   } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Admin: Changelog ─────────────────────────────────────────
+app.get('/admin/changelog', async (req, res) => {
+  if (!adminAuth(req, res)) return;
+  try {
+    const filePath = path.join(__dirname, 'CHANGELOG.md');
+    const content  = await fs.readFile(filePath, 'utf8');
+    res.setHeader('Content-Type', 'text/plain');
+    return res.send(content);
+  } catch (err) {
+    return res.status(404).json({ error: 'CHANGELOG.md not found', message: err.message });
+  }
 });
 
 // ── Admin: Recently active players ───────────────────────────
