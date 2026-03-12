@@ -479,12 +479,16 @@ function buildNarratorSystem(ctx) {
 
   const knownNpcs = Array.isArray(p.knownNpcs)
     ? p.knownNpcs.slice(0, 10).map(n => {
-        const base = `${sanitiseStr(n.name,30)}(${sanitiseStr(n.role||'',20)},${sanitiseStr(n.relationship||'neutral',15)})`;
+        const base = `${sanitiseStr(n.name,30)}(${sanitiseStr(n.role||'',20)},${sanitiseStr(n.relationship||'neutral',15)})${n.notes ? ` — "${sanitiseStr(n.notes, 50)}"` : ''}`;
         const metD = parseInt(n.metDay) || 0;
         const metH = parseFloat(n.metHour) || 0;
         if (!metD) return base;
         const totalHours = (gameDay - metD) * 24 + (gameHour - metH);
         const ago = totalHours < 1 ? 'just met' : totalHours < 24 ? `${Math.round(totalHours)}h ago` : `${Math.floor(totalHours / 24)}d ago`;
+        let interactionSuffix = '';
+        if (n.lastInteractionNotes) {
+          interactionSuffix = ` | Last: "${sanitiseStr(n.lastInteractionNotes, 80)}"`;
+        }
         let travelNote = '';
         if (n.travelDestination) {
           const arrived = gameDay > n.travelArrivesDay || (gameDay === n.travelArrivesDay && gameHour >= (n.travelArrivesHour || 0));
@@ -492,7 +496,7 @@ function buildNarratorSystem(ctx) {
             ? `[now in ${sanitiseStr(n.travelDestination, 30)}]`
             : `[traveling to ${sanitiseStr(n.travelDestination, 30)}, arrives Day ${n.travelArrivesDay}]`;
         }
-        return `${base}[met ${ago}]${travelNote}`;
+        return `${base}[met ${ago}]${interactionSuffix}${travelNote}`;
       }).join('; ') : '';
 
   const scheduledEvents = Array.isArray(p.scheduledEvents) && p.scheduledEvents.length > 0
@@ -667,7 +671,7 @@ RULES:
   - When the player makes an unambiguous, convincing, irreversible pledge to the villain's cause (not merely talking to a cultist — a genuine oath or act of commitment), emit on its own line: {"villainAlly":true}. This is permanent. Do not emit it lightly.
 - Track consequences, remember NPCs, weave in main quest organically
 - When you introduce a NEW named NPC emit on its own line: {"npc":{"name":"Name","role":"Role","relationship":"neutral","notes":"One sentence"}}
-- When an EXISTING NPC from KNOWN NPCS appears or is encountered in the narrative, emit on its own line: {"npcUpdate":{"name":"ExactName"}} — this updates their lastSeen location. Reuse and reference known NPCs naturally across locations — have them reappear in other settlements, remember past interactions, grow or change based on what the player has done.
+- When an EXISTING NPC from KNOWN NPCS appears or is encountered in the narrative, emit on its own line: {"npcUpdate":{"name":"ExactName","lastInteractionNotes":"Brief outcome summary"}} — this updates their lastSeen location and optionally records the interaction outcome. Reuse and reference known NPCs naturally across locations — have them reappear in other settlements, remember past interactions, grow or change based on what the player has done.
 - When a quest is clearly completed say "quest complete" somewhere in your response
 - SHOP RULE: When the player browses a shop through conversation, describe available wares, prices, and the merchant's manner — but do not complete a transaction until a negotiation has concluded. When the player sends the "barter" command, they are opening a price negotiation — engage with it directly. Have the merchant name their asking price and let the scene unfold naturally. Do NOT redirect the player to "use the barter command" — they are already in one. When a barter negotiation ends without a completed purchase (player declines, walks away, or can't agree), give the player a clear final choice in prose (e.g. "The merchant shrugs. Last offer: 65 gold — take it or leave it.") and emit on its own line: {"shopPrice":{"item":"Exact Item Name","price":N}} where N is the final price the merchant was willing to accept. This updates the item's price in the shop for the player's next visit. Only emit shopPrice when a specific item's price was actively negotiated — not for general browsing or window shopping.
 - GOLD RULE: When a barter negotiation or conversational purchase clearly concludes (price agreed, item handed over, payment accepted), emit both {"grant":{"item":"ItemName"}} AND {"goldChange":-N} where N is the gold cost. On a failed negotiation where the player walks away, emit {"shopPrice":{"item":"ItemName","price":N}} with the merchant's last offered price instead (see SHOP RULE). Check the player's current gold balance before confirming any sale — if they cannot afford it, the merchant declines. Never deduct gold without also granting the item, and vice versa.
