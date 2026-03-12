@@ -478,7 +478,18 @@ function buildNarratorSystem(ctx) {
         .map(([slot, n]) => `${sanitiseStr(slot,20)}:${sanitiseStr(n,40)}`).join(', ') || 'none' : 'none';
 
   const knownNpcs = Array.isArray(p.knownNpcs)
-    ? p.knownNpcs.slice(0, 10).map(n => {
+    ? p.knownNpcs.filter(n => {
+        if (n.questGiver) return true;
+        if (n.relationship && n.relationship !== 'neutral') return true;
+        if (n.lastInteractionNotes) return true;
+        const metD = parseInt(n.metDay) || 0;
+        const metH = parseFloat(n.metHour) || 0;
+        if (metD) {
+          const hoursAgo = (gameDay - metD) * 24 + (gameHour - metH);
+          if (hoursAgo <= 48) return true;
+        }
+        return false;
+      }).slice(0, 10).map(n => {
         const base = `${sanitiseStr(n.name,30)}(${sanitiseStr(n.role||'',20)},${sanitiseStr(n.relationship||'neutral',15)})${n.notes ? ` — "${sanitiseStr(n.notes, 50)}"` : ''}`;
         const metD = parseInt(n.metDay) || 0;
         const metH = parseFloat(n.metHour) || 0;
